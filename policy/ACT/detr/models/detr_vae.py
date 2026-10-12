@@ -58,7 +58,8 @@ class DETRVAE(nn.Module):
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         if backbones is not None:
             self.vision_input_proj =nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
-            self.tactile_input_proj =nn.Conv2d(backbones[1].num_channels, hidden_dim, kernel_size=1)
+            if tactile_names:
+                self.tactile_input_proj = nn.Conv2d(backbones[1].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
             self.input_proj_robot_state = nn.Linear(state_dim, hidden_dim)
         else:
@@ -248,8 +249,9 @@ def build(args):
     backbones = []
     backbone = build_backbone(args)
     backbones.append(backbone)
-    backbone = build_tactile_backbone(args)
-    backbones.append(backbone)
+    if args.tactile_names:
+        backbone = build_tactile_backbone(args)
+        backbones.append(backbone)
 
     transformer = build_transformer(args)
 
