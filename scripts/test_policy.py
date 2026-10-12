@@ -124,6 +124,8 @@ def run_batch(args, simulator_args, parser):
               "seed": 0, "instruction_type": "seen"}
     if args.execution_horizon:
         deploy["execution_horizon"] = args.execution_horizon
+    if args.cuda_graph:
+        deploy["use_cuda_graph"] = True
     deploy_file.write_text(yaml.safe_dump(deploy, sort_keys=False))
     (result_dir / "settings.json").write_text(json.dumps(summary, indent=2) + "\n")
 
@@ -234,6 +236,7 @@ def main():
     parser.add_argument("--device", default=os.environ.get("DEVICE", "cuda"))
     parser.add_argument("--models-root", type=Path, default=ROOT / "resources" / "pretrained_models")
     parser.add_argument("--execution-horizon", type=int, help="Number of actions executed before replanning")
+    parser.add_argument("--cuda-graph", action="store_true", help="Enable StarVLA CUDA Graph (already enabled by default)")
     parser.add_argument("--total-num", "--total_num", type=int, default=100)
     parser.add_argument("--start-seed", "--start_seed", type=int, default=-1)
     parser.add_argument("--max-seed", "--max_seed", type=int, default=-1)
@@ -286,6 +289,8 @@ def main():
                   "seed": 0, "instruction_type": "seen"}
         if args.execution_horizon:
             deploy["execution_horizon"] = args.execution_horizon
+        if args.cuda_graph:
+            deploy["use_cuda_graph"] = True
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = args.gpu

@@ -36,3 +36,21 @@ bash test_policy.sh --checkpoint /path/to/run --task lift_can --offline
 | `base_config.yml` | 模型与优化器默认配置 |
 
 该实现由 StarVTLA / starVLA 代码适配，源代码保留相关版权及许可声明。
+
+## CUDA Graph 推理
+
+StarVLA 默认启用 CUDA Graph，并使用单次采样（`repeated_diffusion_steps=1`，取消 ensemble），保留 4 步去噪和原计算精度。统一部署加载旧 checkpoint 时也使用这些推理默认值，无需重新训练或转换 checkpoint。Graph 捕获 GR00T 完整去噪，以及受支持的 Qwen3.5 patchify → vision → text decoder；如显式启用 ensemble，也捕获 repeat 和 ensemble mean。实现已对照本地 `lerobot-v0.5.1-test-cuda_graph` 的 FastVLM / FullChunkGraph 适配。
+
+```bash
+bash test_policy.sh --checkpoint /path/to/run --task lift_can --cuda-graph --headless
+
+# 离线验证，不启动模拟器
+bash test_policy.sh --checkpoint /path/to/run --task lift_can \
+  --offline --hdf5 /path/to/episode.hdf5 --cuda-graph
+```
+
+不再需要传 `--cuda-graph`；该参数保留兼容。部署 YAML 可显式设置 `use_cuda_graph: false` 关闭 Graph，或设置 `repeated_diffusion_steps: 8` 恢复 8 路 ensemble；直接使用模型时可修改对应的 `model.config` 字段。只捕获动作头可另外设置 `model.config.cuda_graph_vlm = False`；设置 `cuda_graph_full_vlm=False` 和 `cuda_graph_full_chunk=False` 可使用上一版的文本 decoder / 分离动作头 Graph。新指令或输入形状首次调用会预热并捕获；每个模块默认最多保存 2 个 Graph，完整 VLM 缓存满后先尝试文本 decoder Graph，再回落 eager。切换训练、加载权重、移动模型设备或 dtype 时会清理 Graph；手动修改参数或模型结构后请调用 `model.clear_cuda_graphs()`。单个模型实例应由单一推理线程/stream 使用。
+
+2026-10-12 对照参考代码调整后，在 RTX 5090 上，三种现有 checkpoint 的部署入口实测加速 **2.30–2.70 倍**，27 组同输入、同初始噪声对比的最大输出差异为 **0**。详细计时口径、首次捕获开销和复现命令见 [CUDA_GRAPH_BENCHMARK.md](CUDA_GRAPH_BENCHMARK.md)。
+
+仅 VAE full 的纯模型四部分平均耗时（各 100 次，不含观测预处理/动作反归一化），见 [VAE_FULL_COMPONENT_BENCHMARK.md](VAE_FULL_COMPONENT_BENCHMARK.md)。

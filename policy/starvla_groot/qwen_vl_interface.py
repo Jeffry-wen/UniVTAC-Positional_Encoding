@@ -107,6 +107,47 @@ class QwenVLInterface(nn.Module):
             self.model.config.hidden_size = text_config.hidden_size
 
         self._init_gpu_preproc(image_resolution)
+        self.use_cuda_graph = False
+        self._text_cuda_graph = None
+        self._prefix_cuda_graph = None
+        core = getattr(self.model, "model", None)
+        text = getattr(core, "language_model", None)
+        if (text is not None and text.config.model_type == "qwen3_5_text"
+                and text.config.rope_parameters["rope_type"] == "default"):
+            from .cuda_graph import Qwen35TextCudaGraph
+            self._text_cuda_graph = Qwen35TextCudaGraph(text)
+            if core.visual.config._attn_implementation == "sdpa":
+                from .cuda_graph import Qwen35PrefixCudaGraph
+                self._prefix_cuda_graph = Qwen35PrefixCudaGraph(self)
+
+    def clear_cuda_graphs(self):
+        if self._text_cuda_graph is not None:
+            self._text_cuda_graph.clear()
+        if self._prefix_cuda_graph is not None:
+            self._prefix_cuda_graph.clear()
+
+    def forward_full_graph(self, images, instructions, extra_embeds=None):
+        if self._prefix_cuda_graph is None or not images.is_cuda:
+            return None
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            return self._prefix_cuda_graph(images, instructions, extra_embeds)
+
+    def forward_graph_features(self, inputs):
+        """Prepare multimodal embeddings eagerly, then replay the text decoder."""
+        core = self.model.model
+        ids, mask = inputs["input_ids"], inputs["attention_mask"]
+        embeds = core.get_input_embeddings()(ids)
+        image_out = core.get_image_features(
+            inputs["pixel_values"], inputs["image_grid_thw"], return_dict=True
+        )
+        image_embeds = torch.cat(image_out.pooler_output, dim=0).to(embeds.device, embeds.dtype)
+        image_mask, _ = core.get_placeholder_mask(ids, inputs_embeds=embeds, image_features=image_embeds)
+        embeds = embeds.masked_scatter(image_mask, image_embeds)
+        positions = core.get_rope_index(
+            ids, inputs["mm_token_type_ids"],
+            image_grid_thw=inputs["image_grid_thw"], attention_mask=mask,
+        )[0]
+        return self._text_cuda_graph(embeds, positions, mask)
 
     # ------------------------------------------------------------------
     # GPU image preprocessing (replaces the per-step PIL + HF-processor path)
@@ -285,14 +326,16 @@ class QwenVLInterface(nn.Module):
             inputs_embeds = inputs_embeds.clone()
             inputs_embeds[:, seq_len:, :] = extra_embeds.to(inputs_embeds.dtype)
 
-            outputs = core(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attn_ext,
-                position_ids=position_ids,
-                use_cache=False,
-            )
-
-        last_hidden = outputs.last_hidden_state
+            if self.use_cuda_graph and self._text_cuda_graph is not None:
+                last_hidden = self._text_cuda_graph(inputs_embeds, position_ids, attn_ext)
+            else:
+                outputs = core(
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attn_ext,
+                    position_ids=position_ids,
+                    use_cache=False,
+                )
+                last_hidden = outputs.last_hidden_state
         return last_hidden, attn_ext.to(dtype=torch.bool)
 
     def build_qwenvl_inputs(self, images: torch.Tensor, instructions: List[str], **kwargs) -> dict:

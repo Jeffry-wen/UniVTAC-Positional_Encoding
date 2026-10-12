@@ -226,14 +226,21 @@ class FlowmatchingActionHead(nn.Module):
         vl_embs: torch.Tensor,
         state: torch.Tensor = None,
         encoder_attention_mask=None,
+        noise: torch.Tensor | None = None,
     ) -> torch.Tensor:
         batch_size = vl_embs.shape[0]
         device = vl_embs.device
-        actions = torch.randn(
-            size=(batch_size, self.action_horizon, self.action_dim),
-            dtype=vl_embs.dtype,
-            device=device,
-        )
+        actions = noise
+        if actions is None:
+            actions = torch.randn(
+                size=(batch_size, self.action_horizon, self.action_dim),
+                dtype=vl_embs.dtype,
+                device=device,
+            )
+        if actions.shape != (batch_size, self.action_horizon, self.action_dim):
+            raise ValueError("noise must have shape [batch_size, action_horizon, action_dim]")
+        if actions.device != device or actions.dtype != vl_embs.dtype:
+            raise ValueError("noise must match vl_embs device and dtype")
 
         num_steps = self.num_inference_timesteps
         dt = 1.0 / num_steps

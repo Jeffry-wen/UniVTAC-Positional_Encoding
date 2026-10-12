@@ -34,6 +34,7 @@ from ..vla_common.tactile_encode import TactileEncoder
 from ..vla_common.utils import expand_tactile_as_image_window
 from .action_head.flow_matching_head import ActionHeadConfig, FlowmatchingActionHead
 from .configuration_starvla_groot import StarvlaGrootConfig
+from .cuda_graph import ActionHeadCudaGraph, TensorCudaGraph
 from .qwen_vl_interface import QwenVLInterface
 
 
@@ -76,6 +77,12 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             dtype=load_dtype,
             image_resolution=config.image_resolution,
         )
+        if self.qwen_vl._text_cuda_graph is not None:
+            self.qwen_vl._text_cuda_graph.warmup_steps = config.cuda_graph_warmup_steps
+            self.qwen_vl._text_cuda_graph.max_graphs = config.cuda_graph_max_graphs
+        if self.qwen_vl._prefix_cuda_graph is not None:
+            self.qwen_vl._prefix_cuda_graph.warmup_steps = config.cuda_graph_warmup_steps
+            self.qwen_vl._prefix_cuda_graph.max_graphs = config.cuda_graph_max_graphs
 
         # Align the DiT cross-attention dim to the VLM hidden size.
         diffusion_model_cfg = dict(config.diffusion_model_cfg)
@@ -98,6 +105,13 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             diffusion_model_cfg=diffusion_model_cfg,
         )
         self.action_head = FlowmatchingActionHead(head_cfg)
+        self._action_cuda_graph = ActionHeadCudaGraph(
+            self.action_head, config.cuda_graph_warmup_steps, config.cuda_graph_max_graphs
+        )
+        self._chunk_cuda_graph = TensorCudaGraph(
+            self.action_head, self._denoise_chunk,
+            config.cuda_graph_warmup_steps, config.cuda_graph_max_graphs,
+        )
 
         # Tactile-encode branch (tactile_mode="encode"). Tactile tokens are projected to
         # the Qwen-VL hidden size, then either:
@@ -134,6 +148,8 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
                     param.requires_grad = False
 
     def train(self, mode: bool = True):
+        if mode and hasattr(self, "_action_cuda_graph"):
+            self.clear_cuda_graphs()
         super().train(mode)
         if self.config.train_expert_only:
             self.qwen_vl.eval()
@@ -142,6 +158,46 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             if visual is not None:
                 visual.eval()
         return self
+
+    def clear_cuda_graphs(self):
+        """Release captured buffers before changing weights or inference settings."""
+        self._action_cuda_graph.clear()
+        self._chunk_cuda_graph.clear()
+        self.qwen_vl.clear_cuda_graphs()
+
+    def _apply(self, fn, recurse=True):
+        if hasattr(self, "_action_cuda_graph"):
+            self.clear_cuda_graphs()
+        return super()._apply(fn, recurse=recurse)
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        self.clear_cuda_graphs()
+        return super()._load_from_state_dict(*args, **kwargs)
+
+    def _predict_actions(self, hidden, state, mask, noise=None):
+        if noise is None:
+            noise = torch.randn(
+                (hidden.shape[0], self.config.chunk_size, self.action_dim),
+                device=hidden.device, dtype=hidden.dtype,
+            )
+        if self.config.use_cuda_graph:
+            return self._action_cuda_graph(hidden, state, mask, noise)
+        return self.action_head.predict_action(hidden, state, mask, noise=noise)
+
+    def _denoise_chunk(self, hidden, state, mask, noise):
+        """FullChunkGraph boundary: repeat, raw head, ensemble mean, output cast."""
+        reps = max(1, int(self.config.repeated_diffusion_steps))
+        if reps > 1:
+            pred = self.action_head.predict_action(
+                hidden.repeat(reps, 1, 1),
+                state.repeat(reps, 1, 1) if state is not None else None,
+                mask.repeat(reps, 1) if mask is not None else None,
+                noise=noise,
+            )
+            pred = pred.view(reps, hidden.shape[0], *pred.shape[1:]).mean(dim=0)
+        else:
+            pred = self.action_head.predict_action(hidden, state, mask, noise=noise)
+        return pred.to(dtype=torch.float32)
 
     # ------------------------------------------------------------------
     # Batch -> model-input bridging
@@ -209,6 +265,10 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
 
     def _encode_prefix(self, batch: dict[str, Tensor]):
         """Run the VLM and return (last_hidden_state, attention_mask)."""
+        self.qwen_vl.use_cuda_graph = (
+            self.config.use_cuda_graph and self.config.cuda_graph_vlm
+            and not self.training and not torch.is_grad_enabled()
+        )
         images = self._build_images(batch)
         instructions = self._get_instructions(batch, len(images))
 
@@ -219,6 +279,20 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 tactile_tokens = self.tactile_encoder.forward_flat(batch)  # [B, n_tac, H]
 
+        if self.qwen_vl.use_cuda_graph and self.config.cuda_graph_full_vlm:
+            extra = tactile_tokens if self.config.tactile_insert_location == "encoder" else None
+            encoded = self.qwen_vl.forward_full_graph(images, instructions, extra)
+            if encoded is not None:
+                last_hidden, attention_mask = encoded
+                if tactile_tokens is not None and extra is None:
+                    tactile_tokens = tactile_tokens.to(device=last_hidden.device, dtype=last_hidden.dtype)
+                    last_hidden = torch.cat([last_hidden, tactile_tokens], dim=1)
+                    attention_mask = torch.cat([
+                        attention_mask, torch.ones(tactile_tokens.shape[:2],
+                                                   dtype=torch.bool, device=last_hidden.device),
+                    ], dim=1)
+                return last_hidden, attention_mask
+
         # Encoder side: inject tactile tokens into the Qwen-VL *input* embeddings so they
         # flow through every LLM layer alongside image/language tokens (deep fusion).
         if tactile_tokens is not None and self.config.tactile_insert_location == "encoder":
@@ -228,13 +302,16 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
         attention_mask = qwen_inputs.get("attention_mask", None)
 
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            outputs = self.qwen_vl(
-                **qwen_inputs,
-                output_attentions=False,
-                output_hidden_states=True,
-                return_dict=True,
-            )
-            last_hidden = outputs.hidden_states[-1]  # [B, L, H]
+            if self.qwen_vl.use_cuda_graph and self.qwen_vl._text_cuda_graph is not None:
+                last_hidden = self.qwen_vl.forward_graph_features(qwen_inputs)
+            else:
+                outputs = self.qwen_vl(
+                    **qwen_inputs,
+                    output_attentions=False,
+                    output_hidden_states=True,
+                    return_dict=True,
+                )
+                last_hidden = outputs.hidden_states[-1]  # [B, L, H]
 
         if attention_mask is not None:
             attention_mask = attention_mask.to(dtype=torch.bool)
@@ -293,18 +370,30 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
         with torch.autocast("cuda", dtype=torch.float32):
             state = self._get_state(batch, last_hidden.device, last_hidden.dtype)
 
+            if self.config.use_cuda_graph and self.config.cuda_graph_full_chunk:
+                noise = kwargs.get("noise")
+                if noise is None:
+                    noise = torch.randn(
+                        (last_hidden.shape[0] * reps, self.config.chunk_size, self.action_dim),
+                        device=last_hidden.device, dtype=last_hidden.dtype,
+                    )
+                return self._chunk_cuda_graph(
+                    last_hidden, state, attention_mask, noise,
+                    extra_key=(reps, self.action_head.num_inference_timesteps),
+                )
+
             if reps > 1:
                 bsize = last_hidden.shape[0]
                 last_hidden_rep = last_hidden.repeat(reps, 1, 1)
                 attn_rep = attention_mask.repeat(reps, 1) if attention_mask is not None else None
                 state_rep = state.repeat(reps, 1, 1) if state is not None else None
-                pred_rep = self.action_head.predict_action(
-                    last_hidden_rep, state_rep, encoder_attention_mask=attn_rep
+                pred_rep = self._predict_actions(
+                    last_hidden_rep, state_rep, attn_rep, noise=kwargs.get("noise")
                 )  # [B * reps, chunk, action_dim]
                 pred_actions = pred_rep.view(reps, bsize, *pred_rep.shape[1:]).mean(dim=0)
             else:
-                pred_actions = self.action_head.predict_action(
-                    last_hidden, state, encoder_attention_mask=attention_mask
+                pred_actions = self._predict_actions(
+                    last_hidden, state, attention_mask, noise=kwargs.get("noise")
                 )  # [B, chunk, action_dim]
 
         return pred_actions.to(dtype=torch.float32)
@@ -314,7 +403,7 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
         self.eval()
         if len(self._action_queue) == 0:
             off = self.config.action_start_offset
-            actions = self.predict_action_chunk(batch)[:, off : off + self.config.n_action_steps]
+            actions = self.predict_action_chunk(batch, **kwargs)[:, off : off + self.config.n_action_steps]
             # (B, n_action_steps, action_dim) -> queue of (B, action_dim)
             self._action_queue.extend(actions.transpose(0, 1))
         return self._action_queue.popleft()

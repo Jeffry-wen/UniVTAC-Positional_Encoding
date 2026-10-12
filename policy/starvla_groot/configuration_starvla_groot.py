@@ -48,13 +48,21 @@ class StarvlaGrootConfig(SensorRoutingMixin, PreTrainedConfig):
     action_model_type: str = "DiT-B"  # "DiT-B" | "DiT-L"
     action_head_hidden_size: int = 1024  # MLP width for state_encoder / action_decoder
     num_inference_timesteps: int = 4  # denoising Euler steps at inference
-    repeated_diffusion_steps: int = 8  # inference-time ensemble size: number of noise
+    repeated_diffusion_steps: int = 1  # inference-time ensemble size: number of noise
     # initializations denoised in parallel at inference and averaged into one action chunk.
     # Training forwards a single noise sample per element (use a larger batch_size to reduce
     # gradient variance instead of replicating the action head, which avoids the memory blow-up).
     num_target_vision_tokens: int = 32  # learnable planning query tokens
     add_pos_embed: bool = True
     max_seq_len: int = 1024
+
+    # Inference only: capture the denoising loop and supported Qwen text decoder.
+    use_cuda_graph: bool = True
+    cuda_graph_vlm: bool = True  # also capture Qwen3.5 text decoder when supported
+    cuda_graph_full_vlm: bool = True  # patchify + vision + text, following FastVLM
+    cuda_graph_full_chunk: bool = True  # repeat + denoise + ensemble mean, following FullChunkGraph
+    cuda_graph_warmup_steps: int = 3
+    cuda_graph_max_graphs: int = 2
 
     # Flow-matching noise schedule (Beta distribution)
     noise_beta_alpha: float = 1.5
@@ -114,6 +122,9 @@ class StarvlaGrootConfig(SensorRoutingMixin, PreTrainedConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.cuda_graph_warmup_steps < 1 or self.cuda_graph_max_graphs < 1:
+            raise ValueError("CUDA Graph warmup steps and cache size must be positive")
 
         if self.n_action_steps > self.chunk_size:
             raise ValueError(

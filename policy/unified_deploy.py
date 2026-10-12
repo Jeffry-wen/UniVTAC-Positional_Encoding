@@ -66,8 +66,11 @@ def make_vla_config(run, device, models_root):
     if run["policy"] == "starvla_groot":
         from policy.starvla_groot.configuration_starvla_groot import StarvlaGrootConfig
         bundled = asset_path(run, "qwen_path")
+        # Inference defaults supersede historical training/checkpoint settings.
+        # Policy args below can still explicitly override them for deployment.
         common.update(base_vlm=str(bundled or models_root / "Qwen3.5-2B"),
-                      vlm_from_config=bundled is not None, action_dim=8, state_dim=8)
+                      vlm_from_config=bundled is not None, action_dim=8, state_dim=8,
+                      use_cuda_graph=True, repeated_diffusion_steps=1)
         return StarvlaGrootConfig(**common)
     from policy.pi05.configuration_pi05 import PI05Config
     common["paligemma_tokenizer_path"] = str(asset_path(run, "tokenizer_path") or
@@ -113,6 +116,10 @@ class Policy(BasePolicy):
             config = make_vla_config(self.run, self.device, models_root)
             if self.kind == "starvla_groot":
                 from policy.starvla_groot.modeling_starvla_groot import StarvlaGrootPolicy
+                config.use_cuda_graph = args.get("use_cuda_graph", config.use_cuda_graph)
+                config.repeated_diffusion_steps = args.get("repeated_diffusion_steps", config.repeated_diffusion_steps)
+                if not isinstance(config.repeated_diffusion_steps, int) or config.repeated_diffusion_steps < 1:
+                    raise ValueError("repeated_diffusion_steps must be a positive integer")
                 self.model = StarvlaGrootPolicy(config).to(self.device)
             else:
                 from transformers import AutoTokenizer
