@@ -256,7 +256,14 @@ def main():
     seed = deploy_config.get("seed", 0)
 
     init_start = time.perf_counter()
-    policy:BasePolicy = policy_module.Policy(deploy_config)
+    defer_policy = policy_name == 'unified_deploy'
+    if defer_policy:
+        # Model allocation before the first UIPC reset can make contact solving
+        # extremely slow. Allocate the model after that reset has completed.
+        from scripts.deferred_policy import DeferredPolicy
+        policy = DeferredPolicy(policy_module.Policy, deploy_config)
+    else:
+        policy = policy_module.Policy(deploy_config)
     policy_init_cost = time.perf_counter() - init_start
 
     init_start = time.perf_counter()
@@ -278,7 +285,10 @@ def main():
     log(f"Timing Plan: {task_env.timing}")
     log(f"Eval Config: {json.dumps(deploy_config, ensure_ascii=False, indent=4)}\n{'-' * 20}\n") 
     log(f"Task init finish in {task_init_cost:.2f} seconds.")
-    log(f"Policy init finish in {policy_init_cost:.2f} seconds.")
+    if defer_policy:
+        log("Policy initialization deferred until the first action.")
+    else:
+        log(f"Policy init finish in {policy_init_cost:.2f} seconds.")
 
     results = eval_policy(
         task=task, policy=policy,
