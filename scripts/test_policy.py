@@ -29,8 +29,8 @@ def hdf5_observation(path, frame, run):
             raise ValueError(f"Frame {frame} is outside {path}")
         observation["embodiment"]["joint"] = torch.from_numpy(h5["embodiment/joint"][frame].copy())
 
-        def rgb(key):
-            image = cv2.imdecode(np.frombuffer(h5[key][frame], dtype=np.uint8), cv2.IMREAD_COLOR)
+        def rgb(key, step=frame):
+            image = cv2.imdecode(np.frombuffer(h5[key][step], dtype=np.uint8), cv2.IMREAD_COLOR)
             if image is None:
                 raise ValueError(f"Cannot decode {path}:{key}[{frame}]")
             # Collection encoded sensor arrays directly with OpenCV. Decoding
@@ -48,10 +48,18 @@ def hdf5_observation(path, frame, run):
                 if mode in ("rgb_only", "marker_rgb"):
                     key = "rgb" if mode == "rgb_only" else "rgb_marker"
                     data = {key: rgb(f"{prefix}/{key}")}
+                    if run["options"].get("tactile_mode") == "native" and mode == "rgb_only":
+                        data["baseline_rgb"] = rgb(f"{prefix}/rgb", 0)
+                    elif run["options"].get("tactile_mode") == "native":
+                        data["baseline"] = {key: rgb(f"{prefix}/{key}", 0)}
                 else:
                     data = {"marker": h5[f"{prefix}/marker"][frame]}
                     if mode == "depth_deform":
                         data["depth"] = h5[f"{prefix}/depth"][frame]
+                    if run["options"].get("tactile_mode") == "native":
+                        data["baseline"] = {"marker": h5[f"{prefix}/marker"][0]}
+                        if mode == "depth_deform":
+                            data["baseline"]["depth"] = h5[f"{prefix}/depth"][0]
                 observation["tactile"][f"{side}_tactile"] = data
     return observation
 
@@ -60,6 +68,7 @@ def inspect_run(run):
     return {"policy": run["policy"], "experiment": run["label"], "step": run["step"],
             "checkpoint": str(run["checkpoint"]), "size_GiB": round(run["checkpoint"].stat().st_size / 1024**3, 2),
             "tasks": run["tasks"], "camera_keys": run["camera_keys"],
+            "action_mode": run["options"]["action_mode"],
             "tactile_mode": run["options"].get("tactile_mode", "none"),
             "tactile_input_mode": run["options"].get("tactile_input_mode"),
             "encoder_method": run["options"].get("encoder_method"),

@@ -1,4 +1,4 @@
-# Training environment only: tactile encoders + ACT / PI0.5 / StarVLA-GR00T.
+# Training environment only: tactile encoders + ACT / PI0.5 / StarVLA-GR00T / N0-VTLA.
 # Target servers: A100/A800 (validated on A100); the 5090 test environment is pending.
 # Validated stack: Linux x86_64, Python 3.11, PyTorch 2.7.0 with CUDA 12.6.
 # See README_yichi.md. Simulator/testing/evaluation dependencies are not included.

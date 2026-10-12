@@ -452,13 +452,11 @@ class PaliGemmaWithExpertModel(
         out_dtype = image.dtype
         if image.dtype != torch.float32:
             image = image.to(torch.float32)
-        image_outputs = self.paligemma.model.get_image_features(image)
-        # transformers >=5.x returns a ModelOutput whose `pooler_output` holds the
-        # multimodal-projected image features (`.last_hidden_state` is the pre-projection
-        # SigLIP output). Older versions returned the projected features as a bare tensor.
-        if not torch.is_tensor(image_outputs):
-            image_outputs = image_outputs.pooler_output
-        features = image_outputs * self.paligemma.config.text_config.hidden_size**0.5
+        # OpenPI uses the unscaled multimodal projection. Call the two modules
+        # directly: get_image_features divided by sqrt(hidden_size) before
+        # Transformers 5.4, but no longer does so in 5.4+.
+        vision_outputs = self.paligemma.model.vision_tower(image)
+        features = self.paligemma.model.multi_modal_projector(vision_outputs.last_hidden_state)
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
         return features

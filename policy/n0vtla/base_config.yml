@@ -1,0 +1,15 @@
+chunk_size: 50
+n_action_steps: 16
+num_inference_steps: 10
+tokenizer_max_length: 200
+optimizer_lr: 2.0e-5
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 1.0e-8
+optimizer_weight_decay: 1.0e-10
+optimizer_grad_clip_norm: 1.0
+scheduler_warmup_steps: 500
+scheduler_decay_steps: 20000
+scheduler_decay_lr: 2.0e-6
+predictor_lr_scale: 0.1
+use_prefix_cache: true
+gradient_checkpointing: true

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from .joint_actions import joint_action_mode
 
 ROOT = Path(__file__).resolve().parents[1]
 STEP_PATTERN = re.compile(r"checkpoint_(\d+)\.pt$")
@@ -11,10 +12,15 @@ STEP_PATTERN = re.compile(r"checkpoint_(\d+)\.pt$")
 
 def training_options(config):
     if "routing" in config:
-        return dict(config["routing"])
-    options = dict(config)
-    options.setdefault("policy", "act")
-    options.setdefault("training_mode", "single_task")
+        options = dict(config["routing"])
+    else:
+        options = dict(config)
+    mode = joint_action_mode(options.get("action_mode", config.get("action_mode", "absolute_joint")))
+    if "action_mode" in config and joint_action_mode(config["action_mode"]) != mode:
+        raise ValueError("Checkpoint config and routing disagree on action_mode")
+    options["action_mode"] = mode
+    options.setdefault("policy", config.get("policy", "act"))
+    options.setdefault("training_mode", config.get("training_mode", "single_task"))
     options.setdefault("tactile_input_mode", config.get("tactile_input_mode", "marker_rgb"))
     options.setdefault("encoder_method", config.get("tactile_encoder_method", "ResNet"))
     options.setdefault("encoder_size", config.get("tactile_encoder_size", "S"))
@@ -35,6 +41,8 @@ def run_label(config):
         task_label = options.get("task") or config.get("tasks", ["unknown"])[0]
     tactile_mode = options.get("tactile_mode", "none")
     parts = [policy, mode, task_label, tactile_mode]
+    if options["action_mode"] == "relative_joint":
+        parts.append("relative_joint")
     if tactile_mode != "none":
         parts.append(options.get("tactile_input_mode", "marker_rgb"))
     if tactile_mode == "encode":
@@ -82,8 +90,13 @@ def load_run(path, step=None):
         if any(value <= 0 for value in stats[name]["std"]):
             raise ValueError(f"{stats_path}: {name}.std must be positive")
     options = training_options(config)
+    if "action_space" in stats:
+        if joint_action_mode(stats["action_space"]["mode"]) != options["action_mode"]:
+            raise ValueError("Checkpoint config and dataset statistics disagree on action_mode")
+    elif options["action_mode"] == "relative_joint":
+        raise ValueError("Relative joint checkpoints require action_space metadata in dataset_stats.json")
     policy = options.get("policy", config.get("policy", "act"))
-    if policy not in ("act", "pi05", "starvla_groot"):
+    if policy not in ("act", "pi05", "starvla_groot", "n0vtla"):
         raise ValueError(f"Unsupported unified checkpoint policy: {policy}")
     if "input_features" in config:
         camera_keys = [key for key in config["input_features"]

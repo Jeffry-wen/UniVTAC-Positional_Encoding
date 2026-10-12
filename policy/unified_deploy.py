@@ -16,6 +16,7 @@ import torch
 from ._base_policy import BasePolicy
 from .checkpoints import ROOT, load_run
 from .inference_assets import asset_path
+from .joint_actions import decode_joint_actions
 
 sys.path.insert(0, str(ROOT / "encoder"))
 from modality import INPUT_CHANNELS, tactile_from_arrays
@@ -61,7 +62,7 @@ def make_vla_config(run, device, models_root):
         tactile_input_mode=options["tactile_input_mode"], tactile_type=options["tactile_type"],
         tactile_insert_location=options["tactile_insert_location"],
         tactile_encoder_path=None, tactile_encoder_config=saved.get("tactile_encoder_config"),
-        state_mode=saved["state_mode"], action_mode=saved["action_mode"], action_gap=saved["action_gap"])
+        state_mode=saved["state_mode"], action_mode=options["action_mode"], action_gap=saved["action_gap"])
     common["chunk_size"] = saved.get("chunk_size", saved["base"].get("chunk_size", options["chunk_size"]))
     if run["policy"] == "starvla_groot":
         from policy.starvla_groot.configuration_starvla_groot import StarvlaGrootConfig
@@ -86,6 +87,7 @@ class Policy(BasePolicy):
             raise ValueError(f"Task {self.task_name} was not trained; available: {self.run['tasks']}")
         self.device = torch.device(args.get("device") or "cuda")
         self.options = self.run["options"]
+        self.action_mode = self.options["action_mode"]
         self.stats = self.run["stats"]
         self.kind = self.run["policy"]
         self.image_size = 256 if self.kind == "act" else self.options.get("image_size", 224)
@@ -112,6 +114,15 @@ class Policy(BasePolicy):
             self.chunk_size = config["chunk_size"]
             self.temporal_agg = bool(config.get("temporal_agg", False))
             default_horizon = 1
+        elif self.kind == "n0vtla":
+            from transformers import AutoTokenizer
+            from .n0vtla.configuration_n0vtla import N0PolicyConfig
+            from .n0vtla.modeling_n0vtla import N0Policy
+            config = N0PolicyConfig(**self.run["config"]["n0_config"])
+            self.tokenizer = AutoTokenizer.from_pretrained(asset_path(self.run, "tokenizer_path"), local_files_only=True)
+            self.model = N0Policy(config).to(self.device)
+            self.chunk_size, self.temporal_agg = config.chunk_size, False
+            default_horizon = config.n_action_steps
         else:
             config = make_vla_config(self.run, self.device, models_root)
             if self.kind == "starvla_groot":
@@ -138,6 +149,8 @@ class Policy(BasePolicy):
             raise ValueError("Checkpoint filename step does not match its saved training step")
         if payload.get("policy", self.kind) != self.kind:
             raise ValueError("Checkpoint policy does not match train_config.yml")
+        if payload.get("action_mode", "absolute_joint") != self.action_mode:
+            raise ValueError("Checkpoint action_mode does not match train_config.yml")
         state = payload["model"]
         if state and all(key.startswith("module.") for key in state):
             state = {key.removeprefix("module."): value for key, value in state.items()}
@@ -153,7 +166,7 @@ class Policy(BasePolicy):
     def normalize_state(self, state):
         state = np.asarray(state, dtype=np.float32)
         stats = self.stats["state"]
-        if self.kind == "pi05":
+        if self.kind in ("pi05", "n0vtla"):
             low, high = np.asarray(stats["q01"], np.float32), np.asarray(stats["q99"], np.float32)
             return 2 * (state - low) / np.maximum(high - low, 1e-6) - 1
         return (state - np.asarray(stats["mean"], np.float32)) / np.asarray(stats["std"], np.float32)
@@ -166,7 +179,12 @@ class Policy(BasePolicy):
                  "task": [self.task_name.replace("_", " ")]}
         for key in self.camera_keys:
             camera = {"cam_high": "head", "cam_wrist": "wrist"}[key.split(".")[-1]]
-            batch[key] = rgb_tensor(observation["observation"][camera]["rgb"], self.image_size).unsqueeze(0)
+            image = observation["observation"][camera]["rgb"]
+            if self.kind == "n0vtla":
+                from .n0vtla.observation_adapter import resize_rgb
+                batch[key] = resize_rgb(training_image(image)).unsqueeze(0)
+            else:
+                batch[key] = rgb_tensor(image, self.image_size).unsqueeze(0)
         if self.tactile_mode != "none":
             for side in ("left", "right"):
                 stream = observation["tactile"][f"{side}_tactile"]
@@ -177,11 +195,33 @@ class Policy(BasePolicy):
                     raw = {"marker": as_numpy(stream["marker"])}
                     if self.tactile_input_mode == "depth_deform":
                         raw["depth"] = as_numpy(stream["depth"])
+                if self.tactile_mode == "native":
+                    from .n0vtla.observation_adapter import native_tactile_from_arrays
+                    tactile = native_tactile_from_arrays(raw, self.tactile_input_mode)
+                    if side not in self.tactile_baselines:
+                        baseline = stream.get("baseline")
+                        if baseline is not None:
+                            if self.tactile_input_mode in ("rgb_only", "marker_rgb"):
+                                baseline_raw = {key: training_image(baseline[key])}
+                            else:
+                                baseline_raw = {k: as_numpy(v) for k, v in baseline.items()}
+                        elif self.tactile_input_mode == "rgb_only" and "baseline_rgb" in stream:
+                            baseline_raw = {"rgb": training_image(stream["baseline_rgb"])}
+                        else:
+                            baseline_raw = raw
+                        self.tactile_baselines[side] = native_tactile_from_arrays(baseline_raw, self.tactile_input_mode)
+                    batch[f"observation.images.tac_{side}"] = tactile.unsqueeze(0)
+                    batch[f"observation.images.tac_{side}.baseline"] = self.tactile_baselines[side].unsqueeze(0)
+                    continue
                 tactile = tactile_from_arrays(raw, self.tactile_input_mode, self.image_size)
                 batch[f"observation.images.tac_{side}"] = tactile.unsqueeze(0)
         if self.tokenizer is not None:
-            from .train_unified import make_pi_tokens
-            make_pi_tokens(batch, self.tokenizer, self.model.config.tokenizer_max_length)
+            if self.kind == "n0vtla":
+                from .n0vtla.observation_adapter import tokenize_batch
+                tokenize_batch(batch, self.tokenizer, self.model.config.tokenizer_max_length)
+            else:
+                from .train_unified import make_pi_tokens
+                make_pi_tokens(batch, self.tokenizer, self.model.config.tokenizer_max_length)
         return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value
                 for key, value in batch.items()}
 
@@ -201,12 +241,13 @@ class Policy(BasePolicy):
         if normalized.shape != (1, self.chunk_size, 8) or not torch.isfinite(normalized).all():
             raise ValueError(f"Invalid action chunk: shape={tuple(normalized.shape)}")
         stats = self.stats["action"]
-        if self.kind == "pi05":
+        if self.kind in ("pi05", "n0vtla"):
             low, high = normalized.new_tensor(stats["q01"]), normalized.new_tensor(stats["q99"])
             actions = (normalized + 1) * (high - low).clamp_min(1e-6) / 2 + low
         else:
             actions = normalized * normalized.new_tensor(stats["std"]) + normalized.new_tensor(stats["mean"])
-        return actions[0].float()
+        anchor = actions.new_tensor(as_numpy(observation["embodiment"]["joint"]).reshape(-1)[:8])
+        return decode_joint_actions(anchor, actions[0].float(), self.action_mode)
 
     def eval(self, task, observation):
         if self.kind == "act" and self.temporal_agg:
@@ -223,6 +264,7 @@ class Policy(BasePolicy):
         return task.take_action(action.to(task.device), action_type="qpos")
 
     def reset(self):
+        self.tactile_baselines = {}
         self.actions = deque()
         self.history = []
         self.time = 0

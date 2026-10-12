@@ -17,14 +17,28 @@ if [[ ! "$NUM_PROCESSES" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-POLICY="${POLICY:-starvla_groot}"                    # act | pi05 | starvla_groot
+POLICY="${POLICY:-starvla_groot}"                    # act | pi05 | starvla_groot | n0vtla
+if [[ "$POLICY" == n0vtla ]]; then
+  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+  ACTION_MODE="${ACTION_MODE:-relative_joint}"
+  TACTILE_MODE="${TACTILE_MODE:-native}"
+  TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-rgb_only}"
+  CHUNK_SIZE="${CHUNK_SIZE:-50}"
+  STEPS="${STEPS:-20000}"
+fi
 TRAINING_MODE="${TRAINING_MODE:-multi_task}" # single_task | multi_task
 TASK="${TASK:-}"                   # single_task only
 TASKS="${TASKS:-}"                         # multi_task comma-separated; empty = all
 EPISODES="${EPISODES:-0}"                 # per task; 0 = all
 CAMERAS="${CAMERAS:-all}"                  # auto | head | all
+ACTION_MODE="${ACTION_MODE:-absolute_joint}" # absolute[_joint] | relative[_joint]; gripper stays absolute
+case "$ACTION_MODE" in
+  absolute|absolute_joint) ACTION_MODE=absolute_joint ;;
+  relative|relative_joint) ACTION_MODE=relative_joint ;;
+  *) echo "Unknown ACTION_MODE: $ACTION_MODE" >&2; exit 2 ;;
+esac
 
-TACTILE_MODE="${TACTILE_MODE:-encode}"     # none | as_image | encode
+TACTILE_MODE="${TACTILE_MODE:-encode}"     # none | as_image | encode | native (N0)
 TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-${INPUT_MODE:-marker_rgb}}" # marker_only | rgb_only | marker_rgb | depth_deform
 TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full (encode only)
 TACTILE_INSERT_LOCATION="${TACTILE_INSERT_LOCATION:-encoder}"
@@ -53,7 +67,7 @@ case "$POLICY" in
       if [[ "$TACTILE_TYPE" == full ]]; then BATCH_SIZE=16; else BATCH_SIZE=64; fi
     fi
     ;;
-  pi05|starvla_groot)
+  pi05|starvla_groot|n0vtla)
     STEPS="${STEPS:-20000}"
     CHUNK_SIZE="${CHUNK_SIZE:-32}"
     BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -72,6 +86,7 @@ fi
 TASK_LABEL="$TASK"
 if [[ "$TRAINING_MODE" == multi_task ]]; then TASK_LABEL="${TASKS//,/_}"; TASK_LABEL="${TASK_LABEL:-all}"; fi
 RUN_LABEL="${POLICY}_${TRAINING_MODE}_${TASK_LABEL}_${TACTILE_MODE}"
+if [[ "$ACTION_MODE" == relative_joint ]]; then RUN_LABEL+="_relative_joint"; fi
 if [[ "$TACTILE_MODE" != none ]]; then RUN_LABEL+="_${TACTILE_INPUT_MODE}"; fi
 if [[ "$TACTILE_MODE" == encode ]]; then
   RUN_LABEL+="_${ENCODER_METHOD}_${ENCODER_SIZE}_${TACTILE_TYPE}_${TACTILE_INSERT_LOCATION}"
@@ -82,6 +97,7 @@ mkdir -p "$(dirname "$OUTPUT_DIR")"
 args=(
   --policy "$POLICY" --training-mode "$TRAINING_MODE" --task "$TASK" --tasks "$TASKS"
   --episodes "$EPISODES" --cameras "$CAMERAS"
+  --action-mode "$ACTION_MODE"
   --tactile-mode "$TACTILE_MODE" --tactile-input-mode "$TACTILE_INPUT_MODE"
   --tactile-type "$TACTILE_TYPE" --tactile-insert-location "$TACTILE_INSERT_LOCATION"
   --steps "$STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CHUNK_SIZE"
@@ -91,6 +107,10 @@ args=(
   --output-dir "$OUTPUT_DIR"
 )
 if [[ -n "$ENCODER_CKPT" ]]; then args+=(--encoder-ckpt "$ENCODER_CKPT"); fi
+if [[ "$POLICY" == n0vtla ]]; then
+  args+=(--pretrained-path "${N0_PRETRAINED_PATH:-$ROOT/resources/pretrained_models/n0-vtla-base}"
+         --tokenizer-path "${N0_TOKENIZER_PATH:-$ROOT/resources/pretrained_models/pi05_base/paligemma-3b-pt-224-tokenizer}")
+fi
 if [[ "$SAVE_CHECKPOINT" == false ]]; then args+=(--no-save-checkpoint); fi
 args+=(--encoder-method "$ENCODER_METHOD" --encoder-size "$ENCODER_SIZE")
 if ((NUM_PROCESSES > 1)); then

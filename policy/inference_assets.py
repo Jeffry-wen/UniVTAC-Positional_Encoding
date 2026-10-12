@@ -12,7 +12,7 @@ def export_assets(directory, policy, *, qwen=None, tokenizer=None):
         qwen.processor.save_pretrained(target)
         qwen.model.config.save_pretrained(target)
         return {"format_version": 1, "qwen_path": relative}
-    if policy == "pi05":
+    if policy in ("pi05", "n0vtla"):
         relative = "inference_assets/tokenizer"
         target = directory / relative
         target.mkdir(parents=True, exist_ok=True)

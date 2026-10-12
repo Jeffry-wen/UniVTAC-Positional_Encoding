@@ -1,6 +1,6 @@
 # Policy training on UniVTAC demonstrations
 
-`train_policy.sh` trains ACT, PI0.5, or StarVLA-GR00T from the same raw Isaac 5.1 HDF5 files. All training code and model assets are local to this repository. The state is `embodiment/joint[t, :8]`; the action chunk begins with `embodiment/joint[t+1, :8]`. Those eight values are seven arm joints and one gripper value. The ninth raw joint column is excluded, matching ACT.
+`train_policy.sh` trains ACT, PI0.5, StarVLA-GR00T, or N0-VTLA from the same raw Isaac 5.1 HDF5 files. All training code and model assets are local to this repository. The state is `embodiment/joint[t, :8]`; the action chunk begins with `embodiment/joint[t+1, :8]`. Those eight values are seven arm joints and one gripper value. The ninth raw joint column is excluded, matching ACT.
 
 ## Setup
 
@@ -28,7 +28,43 @@ POLICY=starvla_groot TRAINING_MODE=multi_task \
 
 `TACTILE_MODE` is `none`, `as_image`, or `encode`. `TACTILE_INPUT_MODE` is `marker_only`, `rgb_only`, `marker_rgb`, or `depth_deform`; `INPUT_MODE` is accepted as a compatibility alias. `encode` additionally uses `TACTILE_TYPE=cls|full` and `ENCODER_CKPT`, or the latest matching `encoder_results/<input>/<method>/<size>/*/encoder.pth`. `as_image` sends the selected tactile representation through a visual path. `marker_only` is already three-channel RGB (`R = G = B`, white marker dots on black), shared by the `as_image` and `encode` paths. Older one-channel marker encoder checkpoints require retraining or explicit weight conversion. Set `CAMERAS=head|all|auto`; `auto` uses both cameras only when every selected task is configured for both.
 
-The per-policy `base_config.yml` files hold model and optimizer defaults. Routing, task selection, data representation, training budget, and output destination are set in `train_policy.sh` using environment variables. PI0.5 and GR00T retain the StarVTLA optimizer defaults, including AdamW at `2.5e-5` and a warmup followed by cosine decay. Their internal horizon is 32 by default; ACT uses 50. Both VLA policies use an **absolute 8D joint** state and action, with the first action at `t+1`.
+The per-policy `base_config.yml` files hold model and optimizer defaults. Routing, task selection, data representation, training budget, and output destination are set in `train_policy.sh` using environment variables. PI0.5 and GR00T retain the StarVTLA optimizer defaults, including AdamW at `2.5e-5` and a warmup followed by cosine decay. The root launcher defaults to chunk 32; set `CHUNK_SIZE` explicitly to override it. All three policies use an **absolute 8D joint state**, with the first action target at `t+1`. Action targets support the two modes below.
+
+### Absolute and relative joint actions
+
+Set `ACTION_MODE=absolute` or `ACTION_MODE=relative`; the canonical names `absolute_joint` and `relative_joint` are also accepted. ACT, PI0.5 and GR00T default to absolute; N0-VTLA defaults to relative in the Bash launcher. Direct Python invocations use `--action-mode` (default absolute). All four policies support both modes through the unified entry points.
+
+| Mode | Arm target at chunk index k | Gripper target |
+| --- | --- | --- |
+| `absolute_joint` | `joint[t+1+k, :7]` | `joint[t+1+k, 7]` |
+| `relative_joint` | `joint[t+1+k, :7] - joint[t, :7]` | `joint[t+1+k, 7]` |
+
+Every relative arm target in a chunk uses the **same current observation** as its anchor. These are position differences, not velocities or consecutive-frame differences. Arm values retain the joint angle units; the gripper retains its raw absolute joint position units. The state input stays absolute in both modes.
+
+```bash
+POLICY=pi05 TRAINING_MODE=single_task TASK=lift_can TACTILE_MODE=none \
+  ACTION_MODE=relative bash train_policy.sh
+
+POLICY=starvla_groot TRAINING_MODE=multi_task TACTILE_MODE=none \
+  ACTION_MODE=absolute bash train_policy.sh
+```
+
+Training converts targets before normalization and computes new action statistics from the training episodes. Relative action moments cover every valid target in the configured chunk horizon, excluding padded tail targets; quantiles use a deterministic uniform sample of at most 200,000 targets to bound memory. Absolute mode preserves the existing next-frame statistics. PI0.5 uses quantile normalization, while ACT and GR00T use mean/std normalization. Changing action mode or chunk horizon requires a new training run and its own statistics.
+
+Deployment reads the mode from the saved run, reverses normalization, and adds the original observation's arm position back to the entire relative chunk. The resulting absolute targets enter the execution queue or ACT temporal aggregation, then the simulator's existing `qpos` API. The gripper is never offset. Do not manually override a checkpoint's action mode at evaluation time.
+
+The mode is saved in `train_config.yml`, `dataset_stats.json`, and each checkpoint payload; inconsistent modes are rejected on load. Older checkpoints without action-mode metadata default to `absolute_joint`. Relative run labels include `_relative_joint` after the tactile mode; existing absolute run names are unchanged. This change covers the unified trainer/deployment bridge; historical standalone policy training scripts retain their own conventions.
+
+### N0-VTLA native tactile backend
+
+```bash
+POLICY=n0vtla TRAINING_MODE=single_task TASK=lift_can \
+  ACTION_MODE=relative BATCH_SIZE=8 bash train_policy.sh
+```
+
+N0 defaults to `TACTILE_MODE=native`, `TACTILE_INPUT_MODE=rgb_only`, chunk 50 and 20,000 steps. All four tactile input representations (`rgb_only`, `marker_rgb`, `marker_only`, `depth_deform`) are supported. Current and episode-first frames are converted to the selected representation before subtraction, then use the original frozen-DINOv2/predictor/latent-token pathway. `TACTILE_MODE=none` provides a missing-touch control with the same model structure. N0 uses quantile normalization and masks padded action time steps and the 24 unused action dimensions in its loss.
+
+The base checkpoint is loaded strictly from `resources/pretrained_models/n0-vtla-base/` (`N0_PRETRAINED_PATH` override); the learned gate and tactile parameters are retained. The existing local PaliGemma tokenizer is bundled into the saved run (`N0_TOKENIZER_PATH` override). The saved model contains DINOv2 weights, so inference requires neither the initialization checkpoint nor a backbone download. Runtime imports are entirely inside UniVTAC; the adjacent N0-VTLA repository is not required. No Transformers installation files are overwritten. See [N0-VTLA details](n0vtla/README.md).
 
 Each run saves `train.log`, `exit_code`, `train_config.yml`, `dataset_stats.json`, `episodes.json`, and step checkpoints under `policy_results/` unless `OUTPUT_DIR` is set. No simulator is started by this training entry point.
 

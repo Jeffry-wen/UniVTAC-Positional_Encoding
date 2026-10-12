@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import asdict
 import json
 import os
 import random
@@ -26,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "encoder"))
 from modality import INPUT_CHANNELS, read_tactile  # noqa: E402
+from policy.joint_actions import encode_joint_actions, joint_action_mode  # noqa: E402
 
 
 class TeeStream:
@@ -146,7 +148,43 @@ def split_files(tasks: list[str], limit: int, seed: int) -> tuple[dict, dict]:
     return train, val
 
 
-def compute_stats(files_by_task: dict[str, list[Path]]) -> dict:
+def relative_action_stats(files_by_task, chunk_size, sample_limit=200_000):
+    """Exact moments over valid chunk targets; bounded uniform sample for quantiles."""
+    rng = np.random.default_rng(42)
+    count = 0
+    total, squares = np.zeros(8), np.zeros(8)
+    samples, priorities = np.empty((0, 8), np.float32), np.empty(0)
+    threshold = 1.0
+    for files in files_by_task.values():
+        for path in files:
+            with h5py.File(path, "r") as f:
+                joint = np.asarray(f["embodiment/joint"][:, :8], dtype=np.float32)
+            for offset in range(1, min(chunk_size, len(joint) - 1) + 1):
+                targets = encode_joint_actions(joint[:-offset], joint[offset:, None, :], "relative_joint")[:, 0]
+                count += len(targets)
+                total += targets.sum(0, dtype=np.float64)
+                squares += np.square(targets.astype(np.float64)).sum(0)
+                keys = rng.random(len(targets))
+                keep = keys < threshold
+                samples = np.concatenate((samples, targets[keep]))
+                priorities = np.concatenate((priorities, keys[keep]))
+                if len(samples) > 2 * sample_limit:
+                    keep = np.argpartition(priorities, sample_limit - 1)[:sample_limit]
+                    samples, priorities = samples[keep], priorities[keep]
+                    threshold = priorities.max()
+    if not count:
+        raise ValueError("No trajectory has at least two joint frames")
+    if len(samples) > sample_limit:
+        keep = np.argpartition(priorities, sample_limit - 1)[:sample_limit]
+        samples = samples[keep]
+    mean = total / count
+    return {"mean": mean.tolist(), "std": np.maximum(np.sqrt(np.maximum(squares / count - mean**2, 0)), 1e-2).tolist(),
+            "q01": np.quantile(samples, 0.01, axis=0).tolist(),
+            "q99": np.quantile(samples, 0.99, axis=0).tolist()}
+
+
+def compute_stats(files_by_task: dict[str, list[Path]], action_mode="absolute_joint", chunk_size=1) -> dict:
+    action_mode = joint_action_mode(action_mode)
     states, actions = [], []
     for files in files_by_task.values():
         for path in files:
@@ -167,12 +205,16 @@ def compute_stats(files_by_task: dict[str, list[Path]]) -> dict:
             "q01": np.quantile(array, 0.01, axis=0).tolist(),
             "q99": np.quantile(array, 0.99, axis=0).tolist(),
         }
+    if action_mode == "relative_joint":
+        result["action"] = relative_action_stats(files_by_task, chunk_size)
+    result["action_space"] = {"mode": action_mode, "chunk_size": chunk_size,
+                              "anchor": "current_observation", "gripper": "absolute"}
     return result
 
 
 class UniVTACDataset(Dataset):
     def __init__(self, files_by_task, *, cameras, tactile_mode, tactile_input_mode,
-                 chunk_size, stats, policy, image_size):
+                 chunk_size, stats, policy, image_size, action_mode="absolute_joint"):
         self.rows = []
         self.task_counts = defaultdict(int)
         self.cameras = cameras
@@ -182,6 +224,8 @@ class UniVTACDataset(Dataset):
         self.stats = stats
         self.policy = policy
         self.image_size = image_size
+        self.action_mode = joint_action_mode(action_mode)
+        self._baselines = {}
         self._files = {}
         for task, paths in files_by_task.items():
             for path in paths:
@@ -204,6 +248,7 @@ class UniVTACDataset(Dataset):
     def __getstate__(self):
         state = self.__dict__.copy()
         state["_files"] = {}
+        state["_baselines"] = {}
         return state
 
     def _file(self, path):
@@ -213,7 +258,7 @@ class UniVTACDataset(Dataset):
 
     def _norm(self, x, name):
         s = self.stats[name]
-        if self.policy == "pi05":
+        if self.policy in ("pi05", "n0vtla"):
             low = np.asarray(s["q01"], dtype=np.float32)
             high = np.asarray(s["q99"], dtype=np.float32)
             return 2 * (x - low) / np.maximum(high - low, 1e-6) - 1
@@ -225,6 +270,9 @@ class UniVTACDataset(Dataset):
         if image is None:
             raise ValueError(f"Failed to decode {f.filename}:{key}[{t}]")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        if self.policy == "n0vtla":
+            from policy.n0vtla.observation_adapter import resize_rgb
+            return resize_rgb(image)
         image = cv2.resize(image, (self.image_size, self.image_size), interpolation=cv2.INTER_AREA)
         return torch.from_numpy(image.copy()).permute(2, 0, 1).float() / 255
 
@@ -237,6 +285,7 @@ class UniVTACDataset(Dataset):
         valid = len(action)
         if valid < self.chunk_size:
             action = np.concatenate((action, np.repeat(action[-1:], self.chunk_size - valid, axis=0)))
+        action = encode_joint_actions(state, action, self.action_mode)
         out = {
             "observation.state": torch.from_numpy(self._norm(state, "state")),
             "action": torch.from_numpy(self._norm(action, "action")),
@@ -248,10 +297,19 @@ class UniVTACDataset(Dataset):
             out[f"observation.images.{key}"] = self._rgb(f, f"observation/{camera}/rgb", t)
         if self.tactile_mode != "none":
             for side in ("left", "right"):
-                tactile = read_tactile(f, side, t, self.tactile_input_mode, self.image_size)
+                if self.tactile_mode == "native":
+                    from policy.n0vtla.observation_adapter import read_native_tactile
+                    tactile = read_native_tactile(f, side, t, self.tactile_input_mode)
+                else:
+                    tactile = read_tactile(f, side, t, self.tactile_input_mode, self.image_size)
                 if self.tactile_mode == "as_image" and tactile.shape[0] == 1:
                     tactile = tactile.repeat(3, 1, 1)
                 out[f"observation.images.tac_{side}"] = tactile
+                if self.tactile_mode == "native":
+                    key = (path, side)
+                    if key not in self._baselines:
+                        self._baselines[key] = read_native_tactile(f, side, 0, self.tactile_input_mode)
+                    out[f"observation.images.tac_{side}.baseline"] = self._baselines[key]
         return out
 
 
@@ -272,6 +330,10 @@ def select_tasks(args):
 
 
 def make_config(args, base, camera_keys, tactile_keys):
+    if args.policy == "n0vtla":
+        from policy.n0vtla.configuration_n0vtla import N0PolicyConfig
+        return N0PolicyConfig(**{**base, "chunk_size": args.chunk_size,
+                               "n_action_steps": min(base["n_action_steps"], args.chunk_size)})
     from policy.vla_common.engine.configs import FeatureType, PolicyFeature
     features = {key: PolicyFeature(FeatureType.VISUAL, (3, args.image_size, args.image_size)) for key in camera_keys}
     features["observation.state"] = PolicyFeature(FeatureType.STATE, (8,))
@@ -286,7 +348,7 @@ def make_config(args, base, camera_keys, tactile_keys):
                   tactile_input_mode=args.tactile_input_mode, tactile_type=args.tactile_type,
                   tactile_encoder_path=str(args.encoder_ckpt) if args.tactile_mode == "encode" else None,
                   tactile_insert_location=args.tactile_insert_location,
-                  state_mode="absolute_joint", action_mode="absolute_joint", action_gap=1,
+                  state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1,
                   device=args.device, push_to_hub=False)
     common["chunk_size"] = args.chunk_size
     if args.policy == "pi05":
@@ -317,14 +379,21 @@ def run(args):
     torch.manual_seed(args.seed)
     if args.tactile_mode == "encode" and not args.encoder_ckpt:
         raise ValueError("encode mode requires --encoder-ckpt")
+    if args.policy == "n0vtla":
+        if args.tactile_mode not in ("native", "none"):
+            raise ValueError("n0vtla supports tactile-mode native or none")
+        if args.image_size != 224:
+            raise ValueError("N0 requires image-size=224")
+    elif args.tactile_mode == "native":
+        raise ValueError("native tactile mode requires policy=n0vtla")
     tasks = select_tasks(args)
     train_files, val_files = split_files(tasks, args.episodes, args.seed)
     if args.world_size > 1:
-        stats_holder = [compute_stats(train_files) if args.rank == 0 else None]
+        stats_holder = [compute_stats(train_files, args.action_mode, args.chunk_size) if args.rank == 0 else None]
         dist.broadcast_object_list(stats_holder, src=0)
         stats = stats_holder[0]
     else:
-        stats = compute_stats(train_files)
+        stats = compute_stats(train_files, args.action_mode, args.chunk_size)
     settings = json.loads((ROOT / "policy" / "task_settings.json").read_text())
     if args.cameras == "auto":
         cameras = ["head", "wrist"] if all(settings[t].get("camera_type") == "all" for t in tasks) else ["head"]
@@ -334,7 +403,7 @@ def run(args):
     make_ds = lambda files: UniVTACDataset(files, cameras=cameras, tactile_mode=args.tactile_mode,
                                            tactile_input_mode=args.tactile_input_mode,
                                            chunk_size=args.chunk_size, stats=stats,
-                                           policy=args.policy, image_size=image_size)
+                                           policy=args.policy, image_size=image_size, action_mode=args.action_mode)
     train_ds, val_ds = make_ds(train_files), make_ds(val_files)
     weights = [1.0 / train_ds.task_counts[task] for task, _, _ in train_ds.rows]
     if args.world_size > 1:
@@ -367,7 +436,7 @@ def run(args):
                     tactile_names=["tac_left", "tac_right"] if args.tactile_mode != "none" else [],
                     tactile_ckpt=str(args.encoder_ckpt) if args.tactile_mode == "encode" else None,
                     tactile_input_mode=args.tactile_input_mode, tactile_type=args.tactile_type,
-                    batch_size=args.batch_size, num_steps=args.steps, device=args.device,
+                    batch_size=args.batch_size, num_steps=args.steps, save_freq=args.save_freq, device=args.device,
                     ckpt_dir=str(output), task_name=tasks[0] if len(tasks) == 1 else "multi_task",
                     seed=args.seed, num_epochs=1)
         if args.tactile_mode == "as_image":
@@ -387,6 +456,25 @@ def run(args):
             config_dump["tactile_encoder_config"] = {key: encoder_state[key] for key in
                 ("method", "size", "architecture", "image_size", "input_mode", "in_chans") if key in encoder_state}
         tokenizer = None
+    elif args.policy == "n0vtla":
+        from transformers import AutoTokenizer
+        from policy.n0vtla.modeling_n0vtla import N0Policy
+        base = yaml.safe_load((ROOT / "policy/n0vtla/base_config.yml").read_text())
+        config = make_config(args, base, camera_keys, tactile_keys)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, local_files_only=True)
+        model = N0Policy(config)
+        model.load_base(args.pretrained_path)
+        model.to(args.device)
+        optim_params = model.get_optim_params()
+        optimizer = torch.optim.AdamW(model.optimizer_groups(), lr=config.optimizer_lr,
+            betas=tuple(config.optimizer_betas), eps=config.optimizer_eps, weight_decay=config.optimizer_weight_decay)
+        scheduler = config.get_scheduler_preset().build(optimizer, args.steps)
+        config_dump = {"policy": args.policy, "n0_config": asdict(config),
+                       "attention_backend": "eager",
+                       "native_model": asdict(config.native_config()), "loss_mask": "valid_steps_first_8_dims",
+                       "camera_names": [key.split(".")[-1] for key in camera_keys],
+                       "chunk_size": args.chunk_size,
+                       "routing": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}}
     else:
         base = yaml.safe_load((ROOT / "policy" / args.policy / "base_config.yml").read_text())
         config = make_config(args, base, camera_keys, tactile_keys)
@@ -411,10 +499,11 @@ def run(args):
         config_dump = {"policy": args.policy, "base": base,
                        "chunk_size": config.chunk_size,
                        "routing": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
-                       "state_mode": "absolute_joint", "action_mode": "absolute_joint", "action_gap": 1,
+                       "state_mode": "absolute_joint", "action_mode": args.action_mode, "action_gap": 1,
                        "tactile_encoder_config": config.tactile_encoder_config,
                        "input_features": {k: list(v.shape) for k, v in config.input_features.items()},
                        "output_features": {k: list(v.shape) for k, v in config.output_features.items()}}
+    config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
                                    "batch_size_per_rank": args.batch_size_per_rank}
     if args.rank == 0:
@@ -430,7 +519,7 @@ def run(args):
                                                             "val": {k: [p.name for p in v] for k, v in val_files.items()}}, indent=2))
         (output / "train_config.yml").write_text(yaml.safe_dump(config_dump, sort_keys=False))
         print(f"Tasks: {tasks}; train rows={len(train_ds)}; val rows={len(val_ds)}; cameras={cameras}; "
-              f"world_size={args.world_size}; global_batch={args.batch_size}; per_gpu_batch={args.batch_size_per_rank}", flush=True)
+              f"action_mode={args.action_mode}; world_size={args.world_size}; global_batch={args.batch_size}; per_gpu_batch={args.batch_size_per_rank}", flush=True)
     core_model = model
     if args.world_size > 1:
         dist.barrier()
@@ -447,7 +536,11 @@ def run(args):
 
     def batch_loss(raw, forward_model):
         if tokenizer is not None:
-            make_pi_tokens(raw, tokenizer, config.tokenizer_max_length)
+            if args.policy == "n0vtla":
+                from policy.n0vtla.observation_adapter import tokenize_batch
+                tokenize_batch(raw, tokenizer, config.tokenizer_max_length)
+            else:
+                make_pi_tokens(raw, tokenizer, config.tokenizer_max_length)
         batch = {k: v.to(args.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                  for k, v in raw.items()}
         if args.policy == "act":
@@ -498,6 +591,7 @@ def run(args):
                 print(f"step={step} val_loss={np.mean(val_losses):.6f}", flush=True)
             if args.save_checkpoint and args.rank == 0:
                 torch.save({"format_version": 1, "policy": args.policy,
+                            "action_mode": args.action_mode,
                             "model": core_model.state_dict(), "optimizer": optimizer.state_dict(),
                             "scheduler": scheduler.state_dict() if scheduler else None,
                             "step": step}, output / f"checkpoint_{step}.pt")
@@ -509,12 +603,17 @@ def run(args):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--policy", choices=["act", "pi05", "starvla_groot"], required=True)
+    p.add_argument("--policy", choices=["act", "pi05", "starvla_groot", "n0vtla"], required=True)
+    p.add_argument("--pretrained-path", type=Path, default=ROOT / "resources/pretrained_models/n0-vtla-base")
+    p.add_argument("--tokenizer-path", type=Path,
+                   default=ROOT / "resources/pretrained_models/pi05_base/paligemma-3b-pt-224-tokenizer")
     p.add_argument("--training-mode", choices=["single_task", "multi_task"], default="single_task")
     p.add_argument("--task", default="lift_can")
     p.add_argument("--tasks", default="", help="Comma-separated task subset for multi_task; empty means all available")
     p.add_argument("--episodes", type=int, default=100, help="Episodes per task; 0 means all")
-    p.add_argument("--tactile-mode", choices=["none", "as_image", "encode"], default="none")
+    p.add_argument("--action-mode", type=joint_action_mode, default="absolute_joint",
+                   help="absolute[_joint] or relative[_joint]; relative arm targets use the current observation; gripper stays absolute")
+    p.add_argument("--tactile-mode", choices=["none", "as_image", "encode", "native"], default="none")
     p.add_argument("--tactile-input-mode", choices=list(INPUT_CHANNELS), default="marker_rgb")
     p.add_argument("--tactile-type", choices=["cls", "full"], default="cls")
     p.add_argument("--tactile-insert-location", choices=["encoder", "decoder"], default="decoder")
