@@ -516,6 +516,10 @@ class VisionTactileSensorUIPC:
             curr_marker_uv[:, 1] < self.tactile_img_height,
         ])
         marker_flow = np.stack([init_marker_uv, curr_marker_uv], axis=0)
+        # Preserve stable-order, pixel-space geometry before visibility filtering,
+        # random sampling, noise, or duplicate padding. Legacy output is unchanged.
+        self.full_marker_flow = marker_flow.astype(np.float32, copy=True)
+        self.full_marker_in_view = marker_mask.copy()
         marker_flow = marker_flow[:, marker_mask]
 
         # post processing

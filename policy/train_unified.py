@@ -26,7 +26,7 @@ from torch.utils.data.distributed import DistributedSampler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "encoder"))
-from modality import INPUT_CHANNELS, read_tactile  # noqa: E402
+from modality import DEPTH_DEFORM_SPEC, INPUT_CHANNELS, read_tactile  # noqa: E402
 from policy.joint_actions import encode_joint_actions, joint_action_mode  # noqa: E402
 
 
@@ -362,15 +362,7 @@ def make_config(args, base, camera_keys, tactile_keys):
     return StarvlaGrootConfig(**common)
 
 
-def make_pi_tokens(batch, tokenizer, max_length):
-    state = batch["observation.state"].detach().cpu().numpy()
-    bins = np.linspace(-1, 1, 257)[:-1]
-    discretized = np.digitize(state, bins=bins) - 1
-    prompts = [f"Task: {task}, State: {' '.join(map(str, row))};\nAction: "
-               for task, row in zip(batch["task"], discretized)]
-    encoded = tokenizer(prompts, max_length=max_length, padding="max_length", truncation=True, return_tensors="pt")
-    batch["observation.language.tokens"] = encoded["input_ids"]
-    batch["observation.language.attention_mask"] = encoded["attention_mask"].bool()
+from policy.pi05.tokenization import make_pi_tokens
 
 
 def run(args):
@@ -379,6 +371,10 @@ def run(args):
     torch.manual_seed(args.seed)
     if args.tactile_mode == "encode" and not args.encoder_ckpt:
         raise ValueError("encode mode requires --encoder-ckpt")
+    if args.tactile_mode == "encode" and args.tactile_input_mode == "depth_deform":
+        encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=False)
+        if encoder_state.get("depth_deform_encoding") != DEPTH_DEFORM_SPEC:
+            raise ValueError("depth_deform encoder uses a different normalization; retrain it with 3 mm / 100 px before policy training")
     if args.policy == "n0vtla":
         if args.tactile_mode not in ("native", "none"):
             raise ValueError("n0vtla supports tactile-mode native or none")
@@ -454,7 +450,7 @@ def run(args):
         if args.tactile_mode == "encode":
             encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=True)
             config_dump["tactile_encoder_config"] = {key: encoder_state[key] for key in
-                ("method", "size", "architecture", "image_size", "input_mode", "in_chans") if key in encoder_state}
+                ("method", "size", "architecture", "image_size", "input_mode", "in_chans", "depth_deform_encoding") if key in encoder_state}
         tokenizer = None
     elif args.policy == "n0vtla":
         from transformers import AutoTokenizer
@@ -503,6 +499,8 @@ def run(args):
                        "tactile_encoder_config": config.tactile_encoder_config,
                        "input_features": {k: list(v.shape) for k, v in config.input_features.items()},
                        "output_features": {k: list(v.shape) for k, v in config.output_features.items()}}
+    if args.tactile_input_mode == "depth_deform":
+        config_dump["depth_deform_encoding"] = DEPTH_DEFORM_SPEC.copy()
     config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
                                    "batch_size_per_rank": args.batch_size_per_rank}

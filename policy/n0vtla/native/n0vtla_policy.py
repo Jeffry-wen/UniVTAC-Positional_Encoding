@@ -752,10 +752,10 @@ class N0VTLAPolicy(PI0Pytorch):
         g_mask = getattr(self, "_last_g_mask", None)
         z = self.z_proj(z).to(self.action_in_proj.weight.dtype)
 
-        dt = torch.tensor(-1.0 / num_steps, dtype=torch.float32, device=device)
+        dt = torch.full((), -1.0 / num_steps, dtype=torch.float32, device=device)
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
+        time = torch.ones((), dtype=torch.float32, device=device)
+        for _ in range(num_steps):
             v_t = self._denoise_step_with_z(
                 state, prefix_pad_masks, past_key_values, x_t, time.expand(bsize), z, g=g, g_mask=g_mask
             )

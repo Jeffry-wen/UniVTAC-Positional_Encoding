@@ -751,7 +751,10 @@ class BaseTask(UipcRLEnv):
             if self.save_count > self.cfg.max_save_frames-1:
                 self.plan_success = False
  
-        if is_save and video_freq:
+        # Unified evaluation records pre-action tensors at the policy boundary.
+        # Do not replace them with post-action raw marker_rgb observations.
+        policy_video = self.mode == 'eval' and getattr(self, 'policy_input_recorder', None) is not None
+        if is_save and video_freq and not policy_video:
             if obs is None:
                 obs = self._get_observations()
             self.video_handler.write(self.get_frame_shot(obs))

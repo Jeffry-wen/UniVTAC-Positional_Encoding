@@ -15,6 +15,7 @@
 # limitations under the License.
 
 import builtins
+from contextlib import nullcontext
 import copy
 import logging
 import math
@@ -31,11 +32,14 @@ else:
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor, nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
+from policy.cuda_graph import CudaGraphPolicyMixin, InferenceCudaGraph, attention_block_mask
 from policy.vla_common.engine.utils.import_utils import _transformers_available, require_package
 
 # Conditional import for type checking and lazy loading
 if TYPE_CHECKING or _transformers_available:
+    from transformers.cache_utils import DynamicCache
     from transformers.models.auto import CONFIG_MAPPING
     from transformers.models.gemma import modeling_gemma
 
@@ -455,7 +459,12 @@ class PaliGemmaWithExpertModel(
         # OpenPI uses the unscaled multimodal projection. Call the two modules
         # directly: get_image_features divided by sqrt(hidden_size) before
         # Transformers 5.4, but no longer does so in 5.4+.
-        vision_outputs = self.paligemma.model.vision_tower(image)
+        # Torch 2.7's memory-efficient FP32 SDPA is unstable on this Blackwell
+        # inference host (even two identical eager calls disagree). Keep vision
+        # in FP32 and use the deterministic math backend in both eager and graph.
+        # The context is scoped to this vision call; other policies are unaffected.
+        with (sdpa_kernel(SDPBackend.MATH) if not self.training else nullcontext()):
+            vision_outputs = self.paligemma.model.vision_tower(image)
         features = self.paligemma.model.multi_modal_projector(vision_outputs.last_hidden_state)
         if features.dtype != out_dtype:
             features = features.to(out_dtype)
@@ -716,7 +725,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
+        att_masks = attention_block_mask(att_masks, dtype=torch.bool, device=pad_masks.device)
 
         bsize = pad_masks.shape[0]
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
@@ -765,7 +774,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
+        att_masks = attention_block_mask(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
         return embs, pad_masks, att_masks, adarms_cond
@@ -877,7 +886,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         x_t = noise
         for step in range(num_steps):
             time = 1.0 + step * dt
-            time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
+            time_tensor = torch.full((), time, dtype=torch.float32, device=device).expand(bsize)
 
             def denoise_step_partial_call(input_x_t, current_timestep=time_tensor):
                 return self.denoise_step(
@@ -934,7 +943,16 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
-        past_key_values = copy.deepcopy(past_key_values)
+        if x_t.is_cuda and torch.cuda.is_current_stream_capturing():
+            # deepcopy clones Tensor storage outside the dispatcher. Those copies
+            # are not replayed, leaving stale prefix K/V when observations change.
+            # DynamicCache.update uses recorded tensor ops and preserves the
+            # original read-only-prefix semantics for each denoising step.
+            past_key_values = DynamicCache(ddp_cache_data=(
+                (layer.keys, layer.values) for layer in past_key_values.layers
+            ))
+        else:
+            past_key_values = copy.deepcopy(past_key_values)
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
             position_ids=position_ids,
@@ -950,7 +968,7 @@ class PI05Pytorch(nn.Module):  # see openpi `PI0Pytorch`
         return self.action_out_proj(suffix_out)
 
 
-class PI05Policy(PreTrainedPolicy):
+class PI05Policy(CudaGraphPolicyMixin, PreTrainedPolicy):
     """PI05 Policy for LeRobot."""
 
     config_class = PI05Config
@@ -989,6 +1007,9 @@ class PI05Policy(PreTrainedPolicy):
             self.model.gradient_checkpointing_enable()
 
         self.model.to(config.device)
+        self._action_cuda_graph = InferenceCudaGraph(
+            self, self._predict_action_chunk_eager, config.cuda_graph_warmup_steps, config.cuda_graph_max_graphs
+        )
 
         self.reset()
 
@@ -1298,6 +1319,20 @@ class PI05Policy(PreTrainedPolicy):
         """Predict a chunk of actions given environment observations."""
         self.eval()
 
+        # Generate noise exactly once outside warmup/capture, including eager calls.
+        if self.config.use_cuda_graph and not self.config.compile_model and not self._rtc_enabled() and not (kwargs.keys() - {"noise", "num_steps"}):
+            tokens = batch[OBS_LANGUAGE_TOKENS]
+            noise = kwargs.get("noise")
+            if noise is None:
+                noise = self.model.sample_noise(
+                    (tokens.shape[0], self.config.chunk_size, self.config.max_action_dim), tokens.device
+                )
+            steps = kwargs.get("num_steps")
+            steps = self.config.num_inference_steps if steps is None else steps
+            return self._action_cuda_graph(batch, noise, steps)
+        return self._predict_action_chunk_eager(batch, **kwargs)
+
+    def _predict_action_chunk_eager(self, batch, noise=None, num_steps=None, **kwargs):
         # Prepare inputs
         images, img_masks = self._preprocess_images(batch)
         tactile_embs = self._preprocess_tactile(batch)
@@ -1307,7 +1342,7 @@ class PI05Policy(PreTrainedPolicy):
         actions = self.model.sample_actions(
             images, img_masks, tokens, masks,
             tactile_embs=tactile_embs, tactile_insert=self.config.tactile_insert_location,
-            **kwargs,
+            noise=noise, num_steps=num_steps, **kwargs,
         )
 
         # Unpad actions to actual action dimension

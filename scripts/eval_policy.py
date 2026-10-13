@@ -67,6 +67,8 @@ parser.add_argument(
 )
 parser.add_argument("--save-dir", type=Path, help="Directory for this task's simulator outputs")
 parser.add_argument("--result-json", type=Path, help="Write machine-readable evaluation totals")
+parser.add_argument("--save-policy-inputs", action="store_true",
+                    help="Save lossless actual visual inputs and their raw source observations (unified_deploy)")
 parser.add_argument("--max-errors", type=int, default=-1,
                     help="Stop after this many evaluation exceptions; -1 preserves unlimited retries")
 add_config_override_argument(parser)
@@ -184,6 +186,9 @@ def eval_policy(
                 f"Instruction: {task.instruction}\n"
                 f"Total {succ_num}/{test_num}({succ_num/test_num*100:.2f}%) success.")
         finally:
+            recorder = getattr(task, 'policy_input_recorder', None)
+            if recorder is not None:
+                recorder.close(succ_status)
             seed += 1
         # Persist completed trials before the next reset can abort in native code.
         if args_cli.result_json is not None:
@@ -226,6 +231,20 @@ def main():
         args_cli.deploy_config, default_root=Path(__file__).parent.parent / 'policy', type='yaml'
     )
     policy_name = deploy_config['policy_name']
+    input_recorder = None
+    if policy_name == 'unified_deploy':
+        from policy.checkpoints import load_run
+        from policy.input_recording import PolicyInputRecorder
+        input_recorder = PolicyInputRecorder(load_run(deploy_config['checkpoint']), args_cli.save_policy_inputs, record_markers=True)
+        tactile_fields = list(task_config.observation_settings.get('tactile', []))
+        for field in ('marker', 'marker_full', 'marker_id', 'marker_in_view', 'depth', 'press_depth'):
+            if field not in tactile_fields:
+                tactile_fields.append(field)
+        task_config.observation_settings['tactile'] = tactile_fields
+        deploy_config['record_policy_video'] = True
+        deploy_config['save_policy_inputs'] = args_cli.save_policy_inputs
+    elif args_cli.save_policy_inputs:
+        raise ValueError('--save-policy-inputs requires unified_deploy')
     deploy_config['task_name'] = task_file_name
     deploy_config['task_config'] = task_config_file.stem
     import os
@@ -276,6 +295,9 @@ def main():
         save_dir=save_dir,
     )
     task: BaseTask = task_env.task
+    if input_recorder is not None:
+        task.policy_input_recorder = input_recorder
+        task.cfg.video_size = input_recorder.video_size
     task_init_cost = time.perf_counter() - init_start
     
     log_path = task.save_root / f"log.log"

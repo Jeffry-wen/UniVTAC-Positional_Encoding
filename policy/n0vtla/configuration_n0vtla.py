@@ -38,6 +38,9 @@ class N0PolicyConfig:
     predictor_lr_scale: float = 0.1
     use_prefix_cache: bool = True
     gradient_checkpointing: bool = True
+    use_cuda_graph: bool = False
+    cuda_graph_warmup_steps: int = 3
+    cuda_graph_max_graphs: int = 2
 
     def __post_init__(self):
         if self.chunk_size < 1 or not 1 <= self.n_action_steps <= self.chunk_size:

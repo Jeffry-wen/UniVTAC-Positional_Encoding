@@ -32,6 +32,9 @@ def native_tactile_from_arrays(data, mode="rgb_only"):
 
 
 def read_native_tactile(h5, side, step, mode="rgb_only"):
+    if mode == 'depth_deform':
+        from encoder.modality import read_tactile
+        return read_tactile(h5, side, step, mode, 224)
     prefix = f"tactile/{side}_tactile"
     if mode in ("rgb_only", "marker_rgb"):
         key = "rgb" if mode == "rgb_only" else "rgb_marker"

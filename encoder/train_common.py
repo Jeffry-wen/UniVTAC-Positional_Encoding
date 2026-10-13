@@ -16,7 +16,8 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from vit_methods import METHODS
 from modality import INPUT_CHANNELS, read_tactile
-from depth_marker_to_deform import convert as depth_marker_to_deform
+from linear_depth_deform import DEPTH_DEFORM_SPEC
+from modality import tactile_from_arrays
 
 
 class TactileFrames(Dataset):
@@ -71,23 +72,22 @@ class TactileFrames(Dataset):
             key = (path, side)
             if key not in self.mapped_arrays:
                 prefix = f'tactile/{side}_tactile'
-                depth = h5[f'{prefix}/depth']
-                marker = h5[f'{prefix}/marker']
-                if (depth.chunks is None and marker.chunks is None
-                        and depth.id.get_offset() is not None
-                        and marker.id.get_offset() is not None):
-                    self.mapped_arrays[key] = (
-                        np.memmap(path, dtype=depth.dtype, mode='r',
-                                  offset=depth.id.get_offset(), shape=depth.shape),
-                        np.memmap(path, dtype=marker.dtype, mode='r',
-                                  offset=marker.id.get_offset(), shape=marker.shape))
+                names = ['depth', 'marker_full' if f'{prefix}/marker_full' in h5 else 'marker']
+                if f'{prefix}/press_depth' in h5:
+                    names.append('press_depth')
+                datasets = {name: h5[f'{prefix}/{name}'] for name in names}
+                if all(ds.chunks is None and ds.id.get_offset() is not None
+                       for ds in datasets.values()):
+                    self.mapped_arrays[key] = {
+                        name: np.memmap(path, dtype=ds.dtype, mode='r',
+                                        offset=ds.id.get_offset(), shape=ds.shape)
+                        for name, ds in datasets.items()}
                 else:
                     self.mapped_arrays[key] = None
             arrays = self.mapped_arrays[key]
             if arrays is not None:
-                depth, marker = arrays
-                channels = depth_marker_to_deform(depth[step], marker[step][:, :63])
-                return torch.from_numpy(channels)
+                return tactile_from_arrays({name: value[step] for name, value in arrays.items()},
+                                           self.input_mode)
         return read_tactile(h5, side, step, self.input_mode)
 
     def _joint_action(self, path, step):
@@ -264,6 +264,8 @@ def run(args):
                               ('input_mode', args.input_mode)):
             if saved.get(key) != expected:
                 raise ValueError(f'Resume checkpoint {key}={saved.get(key)!r}, expected {expected!r}')
+        if args.input_mode == 'depth_deform' and saved.get('depth_deform_encoding') != DEPTH_DEFORM_SPEC:
+            raise ValueError('Resume requires matching depth_deform normalization; start a new run for the new encoding')
         (model.module if isinstance(model, nn.DataParallel) else model).load_state_dict(saved['training_model'])
         optimizer.load_state_dict(saved['optimizer'])
         start_epoch = saved['epoch']
@@ -277,6 +279,8 @@ def run(args):
                               datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     out.mkdir(parents=True, exist_ok=True)
     config = vars(args).copy()
+    if args.input_mode == 'depth_deform':
+        config['depth_deform_encoding'] = DEPTH_DEFORM_SPEC.copy()
     config.update(data_root=str(args.data_root), output_dir=str(out),
                   count=len(train_data) + len(val_data),
                   train_count=len(train_data), val_count=len(val_data),
@@ -418,6 +422,7 @@ def run(args):
                           'architecture': family,
                           'image_size': 224, 'input_mode': args.input_mode,
                           'in_chans': INPUT_CHANNELS[args.input_mode],
+                          'depth_deform_encoding': DEPTH_DEFORM_SPEC.copy() if args.input_mode == 'depth_deform' else None,
                           'encoder': core.encoder.state_dict(),
                           'training_model': core.state_dict(), 'optimizer': optimizer.state_dict(),
                           'epoch': epoch + 1, 'step': global_step,
@@ -428,7 +433,7 @@ def run(args):
             torch.save(checkpoint, out / 'last.pth')
             if improved:
                 torch.save({key: checkpoint[key] for key in ('format_version', 'method', 'size', 'architecture',
-                            'image_size', 'input_mode', 'in_chans', 'encoder', 'epoch', 'step',
+                            'image_size', 'input_mode', 'in_chans', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
                             'val_loss', 'best_val_loss', 'knn_accuracy',
                             'best_probe_accuracy')}, out / 'encoder.pth')
             print(f'Saved {out / "last.pth"}', flush=True)

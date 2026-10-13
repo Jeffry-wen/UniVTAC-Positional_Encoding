@@ -375,6 +375,19 @@ class VisualTactileSensor:
                 obs['press_depth'] = self.get_press_depth_map()
             elif data_type == 'marker':
                 obs['marker'] = self.sensor.data.output['marker_motion'].squeeze(0)
+            elif data_type in ('marker_full', 'marker_id', 'marker_in_view'):
+                simulator = self.sensor.marker_motion_simulator
+                marker_sim = getattr(simulator, 'marker_motion_sim', None)
+                if marker_sim is None or not hasattr(marker_sim, 'full_marker_flow'):
+                    raise RuntimeError(f'{data_type} requires an updated FEM marker simulator')
+                if data_type == 'marker_full':
+                    # [reference/current, stable marker ID, x/y], in raw pixels;
+                    # current coordinates may be outside the sensor image.
+                    obs[data_type] = torch.as_tensor(marker_sim.full_marker_flow.copy(), device=self.device)
+                elif data_type == 'marker_id':
+                    obs[data_type] = torch.arange(marker_sim.full_marker_flow.shape[1], device=self.device)
+                else:
+                    obs[data_type] = torch.as_tensor(marker_sim.full_marker_in_view.copy(), device=self.device)
             elif data_type == 'points':
                 obs['points'] = self.get_init_pts()
             elif data_type == 'pose':

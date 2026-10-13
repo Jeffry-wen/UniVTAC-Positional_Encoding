@@ -89,6 +89,9 @@ class PI05Config(SensorRoutingMixin, PreTrainedConfig):
 
     # Training settings
     gradient_checkpointing: bool = False  # Enable gradient checkpointing for memory optimization
+    use_cuda_graph: bool = False  # Deployment enables this after weights are loaded.
+    cuda_graph_warmup_steps: int = 3
+    cuda_graph_max_graphs: int = 2
     compile_model: bool = False  # Whether to use torch.compile for model optimization
     compile_mode: str = "max-autotune"  # Torch compile mode
     device: str | None = None  # Device to use for the model (None = auto-detect)

@@ -63,6 +63,8 @@ class TactileEncoder(nn.Module):
             "image_size": self.image_size, "in_chans": state["in_chans"],
             "tactile_type": self.mode,
         }
+        if 'depth_deform_encoding' in state:
+            config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
         import torch.nn.functional as F

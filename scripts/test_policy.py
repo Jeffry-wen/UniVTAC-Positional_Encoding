@@ -56,10 +56,16 @@ def hdf5_observation(path, frame, run):
                     data = {"marker": h5[f"{prefix}/marker"][frame]}
                     if mode == "depth_deform":
                         data["depth"] = h5[f"{prefix}/depth"][frame]
+                        for field in ("press_depth", "marker_full", "marker_id", "marker_in_view"):
+                            if f"{prefix}/{field}" in h5:
+                                data[field] = h5[f"{prefix}/{field}"][frame]
                     if run["options"].get("tactile_mode") == "native":
                         data["baseline"] = {"marker": h5[f"{prefix}/marker"][0]}
                         if mode == "depth_deform":
                             data["baseline"]["depth"] = h5[f"{prefix}/depth"][0]
+                            for field in ("press_depth", "marker_full"):
+                                if f"{prefix}/{field}" in h5:
+                                    data["baseline"][field] = h5[f"{prefix}/{field}"][0]
                 observation["tactile"][f"{side}_tactile"] = data
     return observation
 
@@ -245,7 +251,7 @@ def main():
     parser.add_argument("--device", default=os.environ.get("DEVICE", "cuda"))
     parser.add_argument("--models-root", type=Path, default=ROOT / "resources" / "pretrained_models")
     parser.add_argument("--execution-horizon", type=int, help="Number of actions executed before replanning")
-    parser.add_argument("--cuda-graph", action="store_true", help="Enable StarVLA CUDA Graph (already enabled by default)")
+    parser.add_argument("--cuda-graph", action="store_true", help="Enable CUDA Graph inference (default for StarVLA, PI05 and N0VTLA)")
     parser.add_argument("--total-num", "--total_num", type=int, default=100)
     parser.add_argument("--start-seed", "--start_seed", type=int, default=-1)
     parser.add_argument("--max-seed", "--max_seed", type=int, default=-1)

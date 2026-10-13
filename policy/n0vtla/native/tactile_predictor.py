@@ -139,11 +139,11 @@ class TactileActionPredictor(nn.Module):
             # 0 with mask=True, so its cross-attn has a real key instead of the all-masked
             # NaN->zero sanitization path.
             no_tac = ~g_mask.any(dim=1)                                   # (B,)
-            if bool(no_tac.any()):
-                g = g.clone()
-                g[no_tac, 0] = self.null_g.to(g.dtype)
-                g_mask = g_mask.clone()
-                g_mask[no_tac, 0] = True
+            # Keep shapes static and avoid a GPU-to-Python branch during capture.
+            g = g.clone()
+            g[:, 0] = torch.where(no_tac[:, None], self.null_g.to(g.dtype), g[:, 0])
+            g_mask = g_mask.clone()
+            g_mask[:, 0] = g_mask[:, 0] | no_tac
 
         # Residual base = plain learned queries (NO VL content here).
         q = self.latent_queries.unsqueeze(0).expand(B, -1, -1).to(vl_ctx.dtype)

@@ -94,6 +94,8 @@ class Policy(BasePolicy):
         self.camera_keys = self.run["camera_keys"]
         self.tactile_mode = self.options.get("tactile_mode", "none")
         self.tactile_input_mode = self.options.get("tactile_input_mode", "marker_rgb")
+        self.record_policy_video = args.get("record_policy_video", False)
+        self.save_policy_inputs = args.get("save_policy_inputs", False)
         self.tokenizer = None
         models_root = Path(args.get("models_root") or ROOT / "resources" / "pretrained_models").expanduser().resolve()
         if self.kind == "act":
@@ -119,6 +121,7 @@ class Policy(BasePolicy):
             from .n0vtla.configuration_n0vtla import N0PolicyConfig
             from .n0vtla.modeling_n0vtla import N0Policy
             config = N0PolicyConfig(**self.run["config"]["n0_config"])
+            config.use_cuda_graph = args.get("use_cuda_graph", True)
             self.tokenizer = AutoTokenizer.from_pretrained(asset_path(self.run, "tokenizer_path"), local_files_only=True)
             self.model = N0Policy(config).to(self.device)
             self.chunk_size, self.temporal_agg = config.chunk_size, False
@@ -136,6 +139,7 @@ class Policy(BasePolicy):
                 from transformers import AutoTokenizer
                 from policy.pi05.modeling_pi05 import PI05Policy
                 self.tokenizer = AutoTokenizer.from_pretrained(config.paligemma_tokenizer_path, local_files_only=True)
+                config.use_cuda_graph = args.get("use_cuda_graph", True)
                 self.model = PI05Policy(config).to(self.device)
             self.chunk_size = config.chunk_size
             self.temporal_agg = False
@@ -195,6 +199,9 @@ class Policy(BasePolicy):
                     raw = {"marker": as_numpy(stream["marker"])}
                     if self.tactile_input_mode == "depth_deform":
                         raw["depth"] = as_numpy(stream["depth"])
+                        for field in ("press_depth", "marker_full"):
+                            if field in stream:
+                                raw[field] = as_numpy(stream[field])
                 if self.tactile_mode == "native":
                     from .n0vtla.observation_adapter import native_tactile_from_arrays
                     tactile = native_tactile_from_arrays(raw, self.tactile_input_mode)
@@ -220,7 +227,7 @@ class Policy(BasePolicy):
                 from .n0vtla.observation_adapter import tokenize_batch
                 tokenize_batch(batch, self.tokenizer, self.model.config.tokenizer_max_length)
             else:
-                from .train_unified import make_pi_tokens
+                from .pi05.tokenization import make_pi_tokens
                 make_pi_tokens(batch, self.tokenizer, self.model.config.tokenizer_max_length)
         return {key: value.to(self.device) if isinstance(value, torch.Tensor) else value
                 for key, value in batch.items()}
@@ -228,6 +235,13 @@ class Policy(BasePolicy):
     @torch.no_grad()
     def predict_chunk(self, observation):
         batch = self.encode_obs(observation)
+        if self.record_policy_video or self.save_policy_inputs:
+            self.last_video_images = {key: value.detach().cpu().clone() for key, value in batch.items()
+                                      if key.startswith("observation.images.")}
+            self.last_video_input_step = self.time
+            if self.save_policy_inputs:
+                from .input_recording import snapshot_observation
+                self.last_video_observation = snapshot_observation(observation)
         if self.kind == "act":
             cameras = torch.stack([batch[key] for key in self.camera_keys], dim=1)
             mean = cameras.new_tensor([0.485, 0.456, 0.406])[None, None, :, None, None]
@@ -260,10 +274,18 @@ class Policy(BasePolicy):
             if not self.actions:
                 self.actions.extend(self.predict_chunk(observation)[:self.execution_horizon])
             action = self.actions.popleft()
+        recorder = getattr(task, "policy_input_recorder", None)
+        if recorder is not None:
+            recorder.write(task, self.last_video_images, self.last_video_observation,
+                           self.time, self.last_video_input_step)
+            recorder.write_markers(task, observation, self.time, self.last_video_input_step)
         self.time += 1
         return task.take_action(action.to(task.device), action_type="qpos")
 
     def reset(self):
+        self.last_video_images = None
+        self.last_video_observation = None
+        self.last_video_input_step = None
         self.tactile_baselines = {}
         self.actions = deque()
         self.history = []

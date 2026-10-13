@@ -7,6 +7,7 @@ import argparse
 import sys
 
 import torch
+from torch.nn.attention import SDPBackend, sdpa_kernel
 import transformers
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +44,7 @@ def main():
     noise = torch.randn_like(actions)
     time = torch.tensor([0.5], device=args.device)
     policy.eval()
-    with torch.no_grad():
+    with torch.no_grad(), sdpa_kernel(SDPBackend.MATH):
         reference = vlm.paligemma.model.multi_modal_projector(
             vlm.paligemma.model.vision_tower(images[0]).last_hidden_state,
         )

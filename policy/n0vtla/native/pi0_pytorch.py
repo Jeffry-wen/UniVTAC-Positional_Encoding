@@ -2,6 +2,7 @@ import logging
 import math
 
 import torch
+from policy.cuda_graph import attention_block_mask
 from torch import Tensor
 from torch import nn
 import torch.nn.functional as F  # noqa: N812
@@ -274,7 +275,7 @@ class PI0Pytorch(nn.Module):
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
+        att_masks = attention_block_mask(att_masks, dtype=torch.bool, device=pad_masks.device)
 
         # Get batch size from the first dimension of the concatenated tensors
         bsize = pad_masks.shape[0]
@@ -364,7 +365,7 @@ class PI0Pytorch(nn.Module):
 
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
-        att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
+        att_masks = attention_block_mask(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
 
         return embs, pad_masks, att_masks, adarms_cond
@@ -467,11 +468,11 @@ class PI0Pytorch(nn.Module):
         )
 
         dt = -1.0 / num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        dt = torch.full((), dt, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
+        time = torch.ones((), dtype=torch.float32, device=device)
+        for _ in range(num_steps):
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
                 state,
