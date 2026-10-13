@@ -155,10 +155,7 @@ git pull --ff-only origin isaac51
 
 ```bash
 git status -sb
-git diff --check
 git add -A
-git diff --cached --stat
-git diff --cached --check
 git commit -m "..."
 git push origin isaac51
 ```
