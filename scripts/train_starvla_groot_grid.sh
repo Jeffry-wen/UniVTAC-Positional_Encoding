@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run 24 StarVLA-GR00T tactile ablations across four GPUs.
+# Run 48 StarVLA-GR00T tactile ablations across four GPUs.
 # Each run uses one GPU; four independent runs execute concurrently (not DDP).
 set -uo pipefail
 
@@ -15,12 +15,12 @@ WORKER_LOG_ROOT="$OUT_ROOT/logs"
 WORKERS="${WORKERS:-4}"
 
 METHODS=(ResNet VAE MAE DINOv2 I-JEPA V-JEPA)
-INPUTS=(marker_rgb depth_deform)
+INPUTS=(marker_rgb depth_deform_80 depth_deform_160 depth_deform_240)
 TYPES=(cls full)
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   echo "Usage: bash scripts/train_starvla_groot_grid.sh [--dry-run]"
-  echo "Runs 24 configurations, four at a time on GPUs listed by GPUS (default 0,1,2,3)."
+  echo "Runs 48 configurations, four at a time on GPUs listed by GPUS (default 0,1,2,3)."
   echo "This schedules independent single-GPU runs; it does not use DDP."
   exit 0
 fi
@@ -33,12 +33,6 @@ CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/MAE/S/20260930-211901-297
 CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/DINOv2/S/20260930-214410-965503/encoder.pth"
 CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/I-JEPA/S/20261001-073312-844529/encoder.pth"
 CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/V-JEPA/S/20261001-073312-845111/encoder.pth"
-CKPT[depth_deform/ResNet]="$ROOT/encoder_results/depth_deform/ResNet/S/20261001-073241-879741/encoder.pth"
-CKPT[depth_deform/VAE]="$ROOT/encoder_results/depth_deform/VAE/S/20261001-073241-880252/encoder.pth"
-CKPT[depth_deform/MAE]="$ROOT/encoder_results/depth_deform/MAE/S/20261001-073241-880974/encoder.pth"
-CKPT[depth_deform/DINOv2]="$ROOT/encoder_results/depth_deform/DINOv2/S/20261001-073241-881520/encoder.pth"
-CKPT[depth_deform/I-JEPA]="$ROOT/encoder_results/depth_deform/I-JEPA/S/20261001-080316-675871/encoder.pth"
-CKPT[depth_deform/V-JEPA]="$ROOT/encoder_results/depth_deform/V-JEPA/S/20261001-085004-403968/encoder.pth"
 
 IFS=',' read -r -a GPUS <<< "$GPUS_CSV"
 if ((${#GPUS[@]} != 4)); then
@@ -51,6 +45,9 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 for input in "${INPUTS[@]}"; do
   for method in "${METHODS[@]}"; do
+    if [[ "$input" == depth_deform_* ]]; then
+      CKPT[$input/$method]="$(find "$ROOT/encoder_results/$input/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+    fi
     ckpt="${CKPT[$input/$method]}"
     if [[ ! -s "$ckpt" ]]; then
       echo "Missing trained encoder checkpoint: $ckpt" >&2
@@ -113,7 +110,7 @@ run_worker() {
   return "$failures"
 }
 
-echo "Launching 24 runs; four concurrent single-GPU workers on GPUs: $GPUS_CSV"
+echo "Launching 48 runs; four concurrent single-GPU workers on GPUs: $GPUS_CSV"
 echo "Output: $OUT_ROOT"
 echo "Logs: each result directory; worker scheduling logs: $WORKER_LOG_ROOT"
 pids=()
@@ -129,4 +126,4 @@ if ((failed)); then
   echo "One or more runs failed. Inspect result logs under $OUT_ROOT" >&2
   exit 1
 fi
-echo "All 24 runs completed successfully."
+echo "All 48 runs completed successfully."

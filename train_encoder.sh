@@ -12,7 +12,7 @@ DATA_ROOT="$ROOT/resources/data/contact"
 CONFIG=""
 EXTRA=()
 usage() {
-    echo "Usage: $0 [--method ResNet|VAE|MAE|DINOv2|I-JEPA|V-JEPA] [--size S|B] [--input marker_only|rgb_only|marker_rgb|depth_deform] [--data-root DIR] [--config FILE] [-- additional train.py options]"
+    echo "Usage: $0 [--method ResNet|VAE|MAE|DINOv2|I-JEPA|V-JEPA] [--size S|B] [--input marker_only|rgb_only|marker_rgb|depth_deform_80|depth_deform_160|depth_deform_240] [--data-root DIR] [--config FILE] [-- additional train.py options]"
 }
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 done
 case "$METHOD" in ResNet|VAE|MAE|DINOv2|I-JEPA|V-JEPA) ;; *) echo "Invalid model: $METHOD" >&2; exit 2 ;; esac
 case "$SIZE" in S|B) ;; *) echo "Invalid size: $SIZE" >&2; exit 2 ;; esac
-case "$INPUT" in marker_only|rgb_only|marker_rgb|depth_deform) ;; *) echo "Invalid input: $INPUT" >&2; exit 2 ;; esac
+case "$INPUT" in marker_only|rgb_only|marker_rgb|depth_deform_80|depth_deform_160|depth_deform_240) ;; *) echo "Invalid input: $INPUT" >&2; exit 2 ;; esac
 CONFIG="${CONFIG:-$ROOT/encoder/$METHOD/config.yml}"
 RUN_DIR="$ROOT/encoder_results/$INPUT/$METHOD/$SIZE/$(date +%Y%m%d-%H%M%S-%6N)"
 for ((i=0; i<${#EXTRA[@]}; i++)); do

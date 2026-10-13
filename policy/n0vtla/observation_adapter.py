@@ -32,7 +32,8 @@ def native_tactile_from_arrays(data, mode="rgb_only"):
 
 
 def read_native_tactile(h5, side, step, mode="rgb_only"):
-    if mode == 'depth_deform':
+    from encoder.modality import DEPTH_DEFORM_SPECS
+    if mode in DEPTH_DEFORM_SPECS:
         from encoder.modality import read_tactile
         return read_tactile(h5, side, step, mode, 224)
     prefix = f"tactile/{side}_tactile"
@@ -44,8 +45,6 @@ def read_native_tactile(h5, side, step, mode="rgb_only"):
         data = {key: cv2.cvtColor(image, cv2.COLOR_BGR2RGB)}
     else:
         data = {"marker": h5[f"{prefix}/marker"][step]}
-        if mode == "depth_deform":
-            data["depth"] = h5[f"{prefix}/depth"][step]
     return native_tactile_from_arrays(data, mode)
 
 

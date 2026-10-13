@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 METHODS = ('ResNet', 'VAE', 'MAE', 'DINOv2', 'I-JEPA', 'V-JEPA')
-INPUTS = ('marker_only', 'rgb_only', 'marker_rgb', 'depth_deform')
+INPUTS = ('marker_only', 'rgb_only', 'marker_rgb', 'depth_deform_80', 'depth_deform_160', 'depth_deform_240')
 
 
 def run_case(case, args, gpu):

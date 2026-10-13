@@ -20,6 +20,19 @@ DEPTH_DEFORM_SPEC = {
     'displacement_gain_byte': 127, 'interpolation_coordinates': 'reference',
 }
 
+DEPTH_DEFORM_SPECS = {
+    f'depth_deform_{limit}': {
+        **DEPTH_DEFORM_SPEC,
+        'version': f'linear_zero_rest_3mm_{limit}px_v1',
+        'deform_range_px': float(limit),
+    }
+    for limit in (80, 160, 240)
+}
+
+
+def depth_deform_spec(mode):
+    return DEPTH_DEFORM_SPECS[mode].copy()
+
 
 def encode_linear_fields(indentation_mm, displacement_px, depth_range_mm=3., deform_range_px=100.):
     """Encode [H,W] indentation and [2,H,W] reference-coordinate displacement."""

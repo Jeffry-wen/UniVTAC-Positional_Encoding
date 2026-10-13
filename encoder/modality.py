@@ -3,13 +3,13 @@ import cv2
 import numpy as np
 import torch
 if __package__:
-    from .linear_depth_deform import convert_linear, DEPTH_DEFORM_SPEC
+    from .linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
 else:
-    from linear_depth_deform import convert_linear, DEPTH_DEFORM_SPEC
+    from linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
 
 
 INPUT_CHANNELS = {'marker_only': 3, 'rgb_only': 3, 'marker_rgb': 3,
-                  'depth_deform': 3}
+                  **{mode: 3 for mode in DEPTH_DEFORM_SPECS}}
 
 
 def tactile_from_arrays(data, mode, image_size=224):
@@ -31,10 +31,12 @@ def tactile_from_arrays(data, mode, image_size=224):
                 cv2.circle(canvas, (cx, cy), 2, 255, -1)
         # Replicate the marker raster into RGB; each channel contains the same dots.
         return torch.from_numpy(canvas.copy()).unsqueeze(0).repeat(3, 1, 1).float() / 255
+    spec = depth_deform_spec(mode)
     channels = convert_linear(
         data['depth'], data.get('marker_full', data.get('marker')), image_size,
         press_depth=data.get('press_depth'),
-        reference_depth_mm=DEPTH_DEFORM_SPEC['reference_depth_mm'])
+        reference_depth_mm=spec['reference_depth_mm'],
+        depth_range_mm=spec['depth_range_mm'], deform_range_px=spec['deform_range_px'])
     return torch.from_numpy(channels)
 
 
@@ -49,7 +51,7 @@ def read_tactile(h5, side, step, mode, image_size=224):
         data = {key: cv2.cvtColor(image, cv2.COLOR_BGR2RGB)}
     elif mode == 'marker_only':
         data = {'marker': h5[f'{prefix}/marker'][step]}
-    elif mode == 'depth_deform':
+    elif mode in DEPTH_DEFORM_SPECS:
         data = {'depth': h5[f'{prefix}/depth'][step], 'marker': h5[f'{prefix}/marker'][step]}
         for key in ('press_depth', 'marker_full'):
             if f'{prefix}/{key}' in h5:

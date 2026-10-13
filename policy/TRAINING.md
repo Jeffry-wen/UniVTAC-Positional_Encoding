@@ -20,13 +20,13 @@ POLICY=pi05 TRAINING_MODE=multi_task EPISODES=0 \
 
 # One StarVLA-GR00T model, with the local MAE-B depth/deformation encoder.
 POLICY=starvla_groot TRAINING_MODE=multi_task \
-  TACTILE_MODE=encode TACTILE_INPUT_MODE=depth_deform TACTILE_TYPE=full \
+  TACTILE_MODE=encode TACTILE_INPUT_MODE=depth_deform_80 TACTILE_TYPE=full \
   ENCODER_METHOD=MAE ENCODER_SIZE=B bash train_policy.sh
 ```
 
 `TRAINING_MODE=single_task` uses `TASK`; `multi_task` uses all available task directories by default, or the comma-separated `TASKS` subset. `EPISODES` limits episodes **per task**; `0` means all. Multi-task sampling balances tasks so that a longer task does not dominate training. The train/validation split is by complete episode, with seed 42 by default.
 
-`TACTILE_MODE` is `none`, `as_image`, or `encode`. `TACTILE_INPUT_MODE` is `marker_only`, `rgb_only`, `marker_rgb`, or `depth_deform`; `INPUT_MODE` is accepted as a compatibility alias. `encode` additionally uses `TACTILE_TYPE=cls|full` and `ENCODER_CKPT`, or the latest matching `encoder_results/<input>/<method>/<size>/*/encoder.pth`. `as_image` sends the selected tactile representation through a visual path. `marker_only` is already three-channel RGB (`R = G = B`, white marker dots on black), shared by the `as_image` and `encode` paths. Older one-channel marker encoder checkpoints require retraining or explicit weight conversion. Set `CAMERAS=head|all|auto`; `auto` uses both cameras only when every selected task is configured for both.
+`TACTILE_MODE` is `none`, `as_image`, or `encode`. `TACTILE_INPUT_MODE` is `marker_only`, `rgb_only`, `marker_rgb`, or `depth_deform_80`, `depth_deform_160`, `depth_deform_240`; `INPUT_MODE` is accepted as a compatibility alias. `encode` additionally uses `TACTILE_TYPE=cls|full` and `ENCODER_CKPT`, or the latest matching `encoder_results/<input>/<method>/<size>/*/encoder.pth`. `as_image` sends the selected tactile representation through a visual path. `marker_only` is already three-channel RGB (`R = G = B`, white marker dots on black), shared by the `as_image` and `encode` paths. Older one-channel marker encoder checkpoints require retraining or explicit weight conversion. Set `CAMERAS=head|all|auto`; `auto` uses both cameras only when every selected task is configured for both.
 
 The per-policy `base_config.yml` files hold model and optimizer defaults. Routing, task selection, data representation, training budget, and output destination are set in `train_policy.sh` using environment variables. PI0.5 and GR00T retain the StarVTLA optimizer defaults, including AdamW at `2.5e-5` and a warmup followed by cosine decay. The root launcher defaults to chunk 32; set `CHUNK_SIZE` explicitly to override it. All three policies use an **absolute 8D joint state**, with the first action target at `t+1`. Action targets support the two modes below.
 
@@ -62,7 +62,7 @@ POLICY=n0vtla TRAINING_MODE=single_task TASK=lift_can \
   ACTION_MODE=relative BATCH_SIZE=8 bash train_policy.sh
 ```
 
-N0 defaults to `TACTILE_MODE=native`, `TACTILE_INPUT_MODE=rgb_only`, chunk 50 and 20,000 steps. All four tactile input representations (`rgb_only`, `marker_rgb`, `marker_only`, `depth_deform`) are supported. Current and episode-first frames are converted to the selected representation before subtraction, then use the original frozen-DINOv2/predictor/latent-token pathway. `TACTILE_MODE=none` provides a missing-touch control with the same model structure. N0 uses quantile normalization and masks padded action time steps and the 24 unused action dimensions in its loss.
+N0 defaults to `TACTILE_MODE=native`, `TACTILE_INPUT_MODE=rgb_only`, chunk 50 and 20,000 steps. All six tactile input representations (`rgb_only`, `marker_rgb`, `marker_only`, `depth_deform_80`, `depth_deform_160`, `depth_deform_240`) are supported. Current and episode-first frames are converted to the selected representation before subtraction, then use the original frozen-DINOv2/predictor/latent-token pathway. `TACTILE_MODE=none` provides a missing-touch control with the same model structure. N0 uses quantile normalization and masks padded action time steps and the 24 unused action dimensions in its loss.
 
 The base checkpoint is loaded strictly from `resources/pretrained_models/n0-vtla-base/` (`N0_PRETRAINED_PATH` override); the learned gate and tactile parameters are retained. The existing local PaliGemma tokenizer is bundled into the saved run (`N0_TOKENIZER_PATH` override). The saved model contains DINOv2 weights, so inference requires neither the initialization checkpoint nor a backbone download. Runtime imports are entirely inside UniVTAC; the adjacent N0-VTLA repository is not required. No Transformers installation files are overwritten. See [N0-VTLA details](n0vtla/README.md).
 
@@ -135,8 +135,8 @@ Run the following four scripts on four separate eight-GPU machines, one script p
 | --- | --- | --- | --- |
 | 1 | `scripts/train_starvla_groot_node1.sh` | `marker_rgb` | `cls` |
 | 2 | `scripts/train_starvla_groot_node2.sh` | `marker_rgb` | `full` |
-| 3 | `scripts/train_starvla_groot_node3.sh` | `depth_deform` | `cls` |
-| 4 | `scripts/train_starvla_groot_node4.sh` | `depth_deform` | `full` |
+| 3 | `scripts/train_starvla_groot_node3.sh` | `depth_deform_80`, `depth_deform_160`, `depth_deform_240` | `cls` |
+| 4 | `scripts/train_starvla_groot_node4.sh` | `depth_deform_80`, `depth_deform_160`, `depth_deform_240` | `full` |
 
 Every script uses all available tasks and all episodes (with the existing episode-level training/validation split), head and wrist cameras, tactile encoding inserted at `encoder`, six encoder methods (`ResNet`, `VAE`, `MAE`, `DINOv2`, `I-JEPA`, `V-JEPA`), size S, the fixed trained checkpoints listed in `scripts/train_starvla_groot_node.sh`, 30,000 optimizer steps, global batch 64, chunk 32, and a checkpoint every 5,000 steps. Both concurrent experiments use their own automatic rendezvous port. Each method has a separate result directory containing `train.log`, `launcher.log`, and `exit_code`; DDP ranks beyond rank 0 write `train_rank<N>.log` in that directory; failed experiments are reported while remaining methods continue.
 

@@ -39,7 +39,7 @@ case "$ACTION_MODE" in
 esac
 
 TACTILE_MODE="${TACTILE_MODE:-encode}"     # none | as_image | encode | native (N0)
-TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-${INPUT_MODE:-marker_rgb}}" # marker_only | rgb_only | marker_rgb | depth_deform
+TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-${INPUT_MODE:-marker_rgb}}" # marker_only | rgb_only | marker_rgb | depth_deform_80 | depth_deform_160 | depth_deform_240
 TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full (encode only)
 TACTILE_INSERT_LOCATION="${TACTILE_INSERT_LOCATION:-encoder}"
 ENCODER_METHOD="${ENCODER_METHOD:-VAE}"

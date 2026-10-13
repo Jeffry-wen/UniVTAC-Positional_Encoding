@@ -8,6 +8,7 @@ import numpy as np
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'encoder'))
 from linear_depth_deform import encode_linear_fields,convert_linear
 from depth_marker_to_deform import convert
+from modality import INPUT_CHANNELS, tactile_from_arrays, depth_deform_spec
 
 
 def markers(displacement=(0,0)):
@@ -17,6 +18,21 @@ def markers(displacement=(0,0)):
 
 
 class LinearEncodingTest(unittest.TestCase):
+    def test_modes_use_selected_range_and_clip(self):
+        for limit in (80, 160, 240):
+            mode = f'depth_deform_{limit}'
+            with self.subTest(mode=mode):
+                raw = dict(depth=np.full((240, 320), 27, np.float32),
+                           marker=markers((limit / 2, -limit * 2)))
+                result = tactile_from_arrays(raw, mode).numpy()
+                np.testing.assert_allclose(result[:, 100, 100] * 255,
+                                           [85, 191.5, 1], atol=2e-5)
+                self.assertEqual(depth_deform_spec(mode)['deform_range_px'], limit)
+                self.assertEqual(depth_deform_spec(mode)['depth_range_mm'], 3)
+        self.assertNotIn('depth_deform', INPUT_CHANNELS)
+        with self.assertRaises(ValueError):
+            tactile_from_arrays(raw, 'depth_deform')
+
     def test_rest_and_signed_endpoints(self):
         result=encode_linear_fields(np.zeros((2,2)),np.zeros((2,2,2)))
         expected=np.array([0,128,128],dtype=np.uint8)

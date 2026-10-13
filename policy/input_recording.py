@@ -79,9 +79,9 @@ class PolicyInputRecorder:
             self.h5 = h5py.File(self.path,'w')
             self.h5.attrs['checkpoint'] = str(self.run['checkpoint'])
             self.h5.attrs['tactile_input_mode'] = self.mode
-            if self.mode == 'depth_deform':
-                from encoder.linear_depth_deform import DEPTH_DEFORM_SPEC
-                self.h5.attrs['depth_deform_encoding'] = json.dumps(DEPTH_DEFORM_SPEC)
+            if self.mode in ('depth_deform_80', 'depth_deform_160', 'depth_deform_240'):
+                from encoder.linear_depth_deform import depth_deform_spec
+                self.h5.attrs['depth_deform_encoding'] = json.dumps(depth_deform_spec(self.mode))
             self.h5.attrs['image_keys'] = json.dumps(self.keys)
             self.h5.attrs['time_contract'] = 'All arrays correspond to source_action_index; queued actions repeat their inference inputs.'
             self.frame_count = 0
@@ -130,14 +130,14 @@ class PolicyInputRecorder:
                 payload[f'tactile/{side}_tactile/{key}'] = np.asarray(value)
         if self.marker_h5 is None:
             import h5py
-            from encoder.linear_depth_deform import DEPTH_DEFORM_SPEC
+            from encoder.linear_depth_deform import depth_deform_spec
             self.marker_path = Path(task.save_root)/'marker_traces'/f'{task.cfg.seed}.hdf5'
             self.marker_path.parent.mkdir(parents=True, exist_ok=True)
             self.marker_h5 = h5py.File(self.marker_path, 'w')
             self.marker_h5.attrs['checkpoint'] = str(self.run['checkpoint'])
             self.marker_h5.attrs['tactile_input_mode'] = self.mode
-            if self.mode == 'depth_deform':
-                self.marker_h5.attrs['depth_deform_encoding'] = json.dumps(DEPTH_DEFORM_SPEC)
+            if self.mode in ('depth_deform_80', 'depth_deform_160', 'depth_deform_240'):
+                self.marker_h5.attrs['depth_deform_encoding'] = json.dumps(depth_deform_spec(self.mode))
             self.marker_h5.attrs['time_contract'] = 'Live pre-action markers at action_index; policy input last refreshed at source_action_index.'
             self.marker_h5.attrs['marker_layout'] = '[reference/current, stable marker ID order, x/y]; pixels; no clipping'
             self.marker_count = 0

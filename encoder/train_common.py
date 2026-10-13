@@ -16,7 +16,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Sampler, Subset
 from vit_methods import METHODS
 from modality import INPUT_CHANNELS, read_tactile
-from linear_depth_deform import DEPTH_DEFORM_SPEC
+from linear_depth_deform import DEPTH_DEFORM_SPECS, depth_deform_spec
 from modality import tactile_from_arrays
 
 
@@ -37,7 +37,7 @@ class TactileFrames(Dataset):
             cached = lengths.get(str(path)) if lengths else None
             with h5py.File(path, 'r') if cached is None else nullcontext() as h5:
                 for side in ('left', 'right'):
-                    kind = ('depth' if input_mode == 'depth_deform' else 'marker' if input_mode == 'marker_only'
+                    kind = ('depth' if input_mode in DEPTH_DEFORM_SPECS else 'marker' if input_mode == 'marker_only'
                             else 'rgb' if input_mode == 'rgb_only' else 'rgb_marker')
                     key = f'tactile/{side}_tactile/{kind}'
                     if cached is not None:
@@ -68,7 +68,7 @@ class TactileFrames(Dataset):
         if path not in self.handles:
             self.handles[path] = h5py.File(path, 'r')
         h5 = self.handles[path]
-        if self.input_mode == 'depth_deform':
+        if self.input_mode in DEPTH_DEFORM_SPECS:
             key = (path, side)
             if key not in self.mapped_arrays:
                 prefix = f'tactile/{side}_tactile'
@@ -222,7 +222,7 @@ def run(args):
                              args.future_horizon, action_mean, action_std)
     loader_options = dict(batch_size=args.batch_size, num_workers=args.workers,
                           pin_memory=True, persistent_workers=args.workers > 0)
-    if args.input_mode == 'depth_deform':
+    if args.input_mode in DEPTH_DEFORM_SPECS:
         batch_sampler = FileChunkBatchSampler(train_data, args.batch_size, args.seed)
         loader = DataLoader(train_data, batch_sampler=batch_sampler, num_workers=args.workers,
                             pin_memory=True, persistent_workers=args.workers > 0)
@@ -264,7 +264,7 @@ def run(args):
                               ('input_mode', args.input_mode)):
             if saved.get(key) != expected:
                 raise ValueError(f'Resume checkpoint {key}={saved.get(key)!r}, expected {expected!r}')
-        if args.input_mode == 'depth_deform' and saved.get('depth_deform_encoding') != DEPTH_DEFORM_SPEC:
+        if args.input_mode in DEPTH_DEFORM_SPECS and saved.get('depth_deform_encoding') != depth_deform_spec(args.input_mode):
             raise ValueError('Resume requires matching depth_deform normalization; start a new run for the new encoding')
         (model.module if isinstance(model, nn.DataParallel) else model).load_state_dict(saved['training_model'])
         optimizer.load_state_dict(saved['optimizer'])
@@ -279,15 +279,15 @@ def run(args):
                               datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     out.mkdir(parents=True, exist_ok=True)
     config = vars(args).copy()
-    if args.input_mode == 'depth_deform':
-        config['depth_deform_encoding'] = DEPTH_DEFORM_SPEC.copy()
+    if args.input_mode in DEPTH_DEFORM_SPECS:
+        config['depth_deform_encoding'] = depth_deform_spec(args.input_mode)
     config.update(data_root=str(args.data_root), output_dir=str(out),
                   count=len(train_data) + len(val_data),
                   train_count=len(train_data), val_count=len(val_data),
                   train_file_count=len(train_files), val_file_count=len(val_files),
                   train_files=[str(path) for path in train_files],
                   val_files=[str(path) for path in val_files], split_strategy='file',
-                  data_sampling='file_chunks_8' if args.input_mode == 'depth_deform'
+                  data_sampling='file_chunks_8' if args.input_mode in DEPTH_DEFORM_SPECS
                                 else 'random_frames')
     if action_conditioned:
         config['action_mean'] = action_mean.tolist()
@@ -422,7 +422,7 @@ def run(args):
                           'architecture': family,
                           'image_size': 224, 'input_mode': args.input_mode,
                           'in_chans': INPUT_CHANNELS[args.input_mode],
-                          'depth_deform_encoding': DEPTH_DEFORM_SPEC.copy() if args.input_mode == 'depth_deform' else None,
+                          'depth_deform_encoding': depth_deform_spec(args.input_mode) if args.input_mode in DEPTH_DEFORM_SPECS else None,
                           'encoder': core.encoder.state_dict(),
                           'training_model': core.state_dict(), 'optimizer': optimizer.state_dict(),
                           'epoch': epoch + 1, 'step': global_step,

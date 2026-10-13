@@ -20,7 +20,7 @@ elif (($#)); then
   echo "Unknown arguments: $*" >&2
   exit 2
 fi
-case "$INPUT/$TYPE" in marker_rgb/cls|marker_rgb/full|depth_deform/cls|depth_deform/full) ;; *) exit 2 ;; esac
+case "$INPUT/$TYPE" in marker_rgb/cls|marker_rgb/full|depth_deform_80/cls|depth_deform_80/full|depth_deform_160/cls|depth_deform_160/full|depth_deform_240/cls|depth_deform_240/full) ;; *) exit 2 ;; esac
 if ! PYTHON_BIN="$(command -v "${PYTHON_BIN:-python}")"; then
   echo "Python not found; set PYTHON_BIN for this machine." >&2
   exit 2
@@ -38,12 +38,6 @@ CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/MAE/S/20260930-211901-297
 CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/DINOv2/S/20260930-214410-965503/encoder.pth"
 CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/I-JEPA/S/20261001-073312-844529/encoder.pth"
 CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/V-JEPA/S/20261001-073312-845111/encoder.pth"
-CKPT[depth_deform/ResNet]="$ROOT/encoder_results/depth_deform/ResNet/S/20261001-073241-879741/encoder.pth"
-CKPT[depth_deform/VAE]="$ROOT/encoder_results/depth_deform/VAE/S/20261001-073241-880252/encoder.pth"
-CKPT[depth_deform/MAE]="$ROOT/encoder_results/depth_deform/MAE/S/20261001-073241-880974/encoder.pth"
-CKPT[depth_deform/DINOv2]="$ROOT/encoder_results/depth_deform/DINOv2/S/20261001-073241-881520/encoder.pth"
-CKPT[depth_deform/I-JEPA]="$ROOT/encoder_results/depth_deform/I-JEPA/S/20261001-080316-675871/encoder.pth"
-CKPT[depth_deform/V-JEPA]="$ROOT/encoder_results/depth_deform/V-JEPA/S/20261001-085004-403968/encoder.pth"
 IFS=',' read -r -a GPU_IDS <<< "$GPUS_CSV"
 if ((${#GPU_IDS[@]} != 8)); then
   echo "GPUS must contain eight distinct GPU indices; got $GPUS_CSV" >&2
@@ -64,6 +58,9 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 2
 fi
 for method in "${METHODS[@]}"; do
+  if [[ "$INPUT" == depth_deform_* ]]; then
+    CKPT[$INPUT/$method]="$(find "$ROOT/encoder_results/$INPUT/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+  fi
   if [[ ! -s "${CKPT[$INPUT/$method]}" ]]; then
     echo "Missing encoder checkpoint: ${CKPT[$INPUT/$method]}" >&2
     exit 2

@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 METHODS = ('ResNet', 'VAE', 'MAE', 'DINOv2', 'I-JEPA', 'V-JEPA')
-INPUTS = ('marker_rgb', 'marker_only', 'rgb_only', 'depth_deform')
+INPUTS = ('marker_rgb', 'marker_only', 'rgb_only', 'depth_deform_80', 'depth_deform_160', 'depth_deform_240')
 
 
 def train(case, gpu, data_root):

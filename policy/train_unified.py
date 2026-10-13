@@ -26,7 +26,7 @@ from torch.utils.data.distributed import DistributedSampler
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "encoder"))
-from modality import DEPTH_DEFORM_SPEC, INPUT_CHANNELS, read_tactile  # noqa: E402
+from modality import DEPTH_DEFORM_SPECS, depth_deform_spec, INPUT_CHANNELS, read_tactile  # noqa: E402
 from policy.joint_actions import encode_joint_actions, joint_action_mode  # noqa: E402
 
 
@@ -371,10 +371,10 @@ def run(args):
     torch.manual_seed(args.seed)
     if args.tactile_mode == "encode" and not args.encoder_ckpt:
         raise ValueError("encode mode requires --encoder-ckpt")
-    if args.tactile_mode == "encode" and args.tactile_input_mode == "depth_deform":
+    if args.tactile_mode == "encode" and args.tactile_input_mode in DEPTH_DEFORM_SPECS:
         encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=False)
-        if encoder_state.get("depth_deform_encoding") != DEPTH_DEFORM_SPEC:
-            raise ValueError("depth_deform encoder uses a different normalization; retrain it with 3 mm / 100 px before policy training")
+        if encoder_state.get("depth_deform_encoding") != depth_deform_spec(args.tactile_input_mode):
+            raise ValueError("depth_deform encoder uses a different normalization; retrain it with the selected depth/deform ranges before policy training")
     if args.policy == "n0vtla":
         if args.tactile_mode not in ("native", "none"):
             raise ValueError("n0vtla supports tactile-mode native or none")
@@ -499,8 +499,8 @@ def run(args):
                        "tactile_encoder_config": config.tactile_encoder_config,
                        "input_features": {k: list(v.shape) for k, v in config.input_features.items()},
                        "output_features": {k: list(v.shape) for k, v in config.output_features.items()}}
-    if args.tactile_input_mode == "depth_deform":
-        config_dump["depth_deform_encoding"] = DEPTH_DEFORM_SPEC.copy()
+    if args.tactile_input_mode in DEPTH_DEFORM_SPECS:
+        config_dump["depth_deform_encoding"] = depth_deform_spec(args.tactile_input_mode)
     config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
                                    "batch_size_per_rank": args.batch_size_per_rank}
