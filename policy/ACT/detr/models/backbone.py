@@ -198,6 +198,9 @@ class ViTTactileBackbone(nn.Module):
             state = torch.load(ckpt, map_location='cpu', weights_only=True)
         if state.get('method') != method or state.get('size') != size:
             raise ValueError(f'Checkpoint is {state.get("method")}/ViT-{state.get("size")}, expected {method}/ViT-{size}')
+        if input_mode in ('rgb_only', 'marker_rgb'):
+            from encoder.image_io import require_rgb_model
+            require_rgb_model(state)
         if state.get('input_mode', 'marker_rgb') != input_mode:
             raise ValueError(f'Checkpoint input is {state.get("input_mode", "marker_rgb")}, expected {input_mode}')
         if method == 'VAE' and 'encoder' in state and not any(key.startswith('downsample.') for key in state['encoder']):
@@ -253,6 +256,9 @@ class CNNTactileBackbone(nn.Module):
         super().__init__()
         if state.get('method') != 'ResNet' or state.get('size') != size:
             raise ValueError(f'Expected ResNet-{size} checkpoint, got {state.get("method")}-{state.get("size")}')
+        if input_mode in ('rgb_only', 'marker_rgb'):
+            from encoder.image_io import require_rgb_model
+            require_rgb_model(state)
         if state.get('input_mode') != input_mode:
             raise ValueError(f'Checkpoint input is {state.get("input_mode")}, expected {input_mode}')
         encoder_dir = Path(__file__).resolve().parents[4] / 'encoder'

@@ -107,6 +107,7 @@ class JointActionTests(unittest.TestCase):
             def __call__(self, *args):
                 return chunk.clone()
         policy.model = Model()
+        policy.record_policy_video = policy.save_policy_inputs = False
         policy.encode_obs = lambda obs: {"observation.state": torch.zeros(1, 8), "camera": torch.zeros(1, 3, 2, 2)}
         policy.camera_keys, policy.tactile_mode, policy.device = ["camera"], "none", torch.device("cpu")
         policy.reset()

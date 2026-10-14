@@ -9,6 +9,7 @@ _encoder_dir = Path(__file__).resolve().parents[2] / 'encoder'
 if str(_encoder_dir) not in sys.path:
     sys.path.insert(0, str(_encoder_dir))
 from modality import read_tactile, INPUT_CHANNELS
+from encoder.image_io import read_rgb
 from torch.utils.data import TensorDataset, DataLoader
 from torchvision import transforms
 
@@ -273,13 +274,6 @@ class RawUniVTACDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self._dataset)
 
-    @staticmethod
-    def decode(buffer):
-        image = cv2.imdecode(np.frombuffer(buffer, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError('Failed to decode HDF5 image')
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
     def __getitem__(self, index):
         episode_idx, start, end = self._dataset[index]
         cache = _worker_hdf5_cache.setdefault(threading.get_ident(), {})
@@ -295,7 +289,7 @@ class RawUniVTACDataset(torch.utils.data.Dataset):
         is_pad = np.ones(self.chunk_size, dtype=bool)
         is_pad[:len(action)] = False
         camera_paths = {'cam_high': 'observation/head/rgb', 'cam_wrist': 'observation/wrist/rgb'}
-        cams = torch.stack([self.cam_image_trans(self.decode(root[camera_paths[name]][start]))
+        cams = torch.stack([self.cam_image_trans(read_rgb(root[camera_paths[name]], start))
                             for name in self.camera_names]) if self.camera_names else torch.empty(0)
         tactile = torch.stack([read_tactile(root, name.removeprefix('tac_'), start, self.input_mode, 256)
                                for name in self.tactile_names]) if self.tactile_names else torch.empty(0)

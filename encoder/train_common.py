@@ -18,6 +18,7 @@ from vit_methods import METHODS
 from modality import INPUT_CHANNELS, read_tactile
 from linear_depth_deform import DEPTH_DEFORM_SPECS, depth_deform_spec
 from modality import tactile_from_arrays
+from image_io import require_rgb_model
 
 
 class TactileFrames(Dataset):
@@ -260,6 +261,8 @@ def run(args):
     stale_epochs = 0
     if args.resume:
         saved = torch.load(args.resume, map_location='cpu', weights_only=False)
+        if args.input_mode in ('rgb_only', 'marker_rgb'):
+            require_rgb_model(saved)
         for key, expected in (('method', args.method), ('size', args.size),
                               ('input_mode', args.input_mode)):
             if saved.get(key) != expected:
@@ -279,6 +282,7 @@ def run(args):
                               datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     out.mkdir(parents=True, exist_ok=True)
     config = vars(args).copy()
+    config["color_order"] = "RGB"
     if args.input_mode in DEPTH_DEFORM_SPECS:
         config['depth_deform_encoding'] = depth_deform_spec(args.input_mode)
     config.update(data_root=str(args.data_root), output_dir=str(out),
@@ -418,7 +422,7 @@ def run(args):
         print(json.dumps(validation_record), flush=True)
         core = model.module if isinstance(model, nn.DataParallel) else model
         if not args.no_save:
-            checkpoint = {'format_version': 1, 'method': args.method, 'size': args.size,
+            checkpoint = {'format_version': 2, 'color_order': 'RGB', 'method': args.method, 'size': args.size,
                           'architecture': family,
                           'image_size': 224, 'input_mode': args.input_mode,
                           'in_chans': INPUT_CHANNELS[args.input_mode],
@@ -433,7 +437,7 @@ def run(args):
             torch.save(checkpoint, out / 'last.pth')
             if improved:
                 torch.save({key: checkpoint[key] for key in ('format_version', 'method', 'size', 'architecture',
-                            'image_size', 'input_mode', 'in_chans', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
+                            'image_size', 'input_mode', 'in_chans', 'color_order', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
                             'val_loss', 'best_val_loss', 'knn_accuracy',
                             'best_probe_accuracy')}, out / 'encoder.pth')
             print(f'Saved {out / "last.pth"}', flush=True)

@@ -16,6 +16,7 @@ import torch
 from ._base_policy import BasePolicy
 from .checkpoints import ROOT, load_run
 from .inference_assets import asset_path
+from encoder.image_io import require_rgb_model
 from .joint_actions import decode_joint_actions
 
 sys.path.insert(0, str(ROOT / "encoder"))
@@ -26,21 +27,16 @@ def as_numpy(value):
     return value.detach().cpu().numpy() if isinstance(value, torch.Tensor) else np.asarray(value)
 
 
-def training_image(value):
-    """Match images read from existing UniVTAC HDF5 demonstrations.
-
-    Collection passes sensor RGB arrays directly to OpenCV's BGR JPEG encoder.
-    Training decodes those bytes and applies BGR2RGB, reversing sensor channels.
-    Existing checkpoints therefore require the same reversal on live inputs.
-    """
+def rgb_image(value):
+    """Live sensor images already use the model's RGB convention."""
     image = as_numpy(value)
     if image.ndim != 3 or image.shape[-1] != 3:
         raise ValueError(f"Expected RGB [H,W,3], got {image.shape}")
-    return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    return image
 
 
 def rgb_tensor(value, image_size):
-    image = training_image(value)
+    image = rgb_image(value)
     image = cv2.resize(image, (image_size, image_size), interpolation=cv2.INTER_AREA)
     return torch.from_numpy(image.copy()).permute(2, 0, 1).float() / 255
 
@@ -82,6 +78,7 @@ def make_vla_config(run, device, models_root):
 class Policy(BasePolicy):
     def __init__(self, args):
         self.run = load_run(args["checkpoint"])
+        require_rgb_model(self.run["config"])
         self.task_name = args["task_name"]
         if self.task_name not in self.run["tasks"]:
             raise ValueError(f"Task {self.task_name} was not trained; available: {self.run['tasks']}")
@@ -102,7 +99,7 @@ class Policy(BasePolicy):
             from .ACT.act_policy import ACTPolicy
             saved = self.run["config"]
             config = {key: value for key, value in saved.items()
-                      if key not in ("routing", "distributed", "tasks", "training_mode")}
+                      if key not in ("routing", "distributed", "tasks", "training_mode", "color_order")}
             config.update(device=str(self.device), ckpt_dir=str(self.run["directory"]),
                           task_name=self.task_name, seed=0, num_epochs=1, tactile_ckpt=None)
             if self.tactile_mode == "encode":
@@ -147,6 +144,7 @@ class Policy(BasePolicy):
 
         # mmap keeps the optimizer tensors in the training bundle out of RAM.
         payload = torch.load(self.run["checkpoint"], map_location="cpu", weights_only=True, mmap=True)
+        require_rgb_model(payload)
         if "model" not in payload:
             raise ValueError("Expected a train_policy.sh checkpoint containing a 'model' state dict")
         if self.run["step"] is not None and payload.get("step") != self.run["step"]:
@@ -186,7 +184,7 @@ class Policy(BasePolicy):
             image = observation["observation"][camera]["rgb"]
             if self.kind == "n0vtla":
                 from .n0vtla.observation_adapter import resize_rgb
-                batch[key] = resize_rgb(training_image(image)).unsqueeze(0)
+                batch[key] = resize_rgb(rgb_image(image)).unsqueeze(0)
             else:
                 batch[key] = rgb_tensor(image, self.image_size).unsqueeze(0)
         if self.tactile_mode != "none":
@@ -194,7 +192,7 @@ class Policy(BasePolicy):
                 stream = observation["tactile"][f"{side}_tactile"]
                 if self.tactile_input_mode in ("rgb_only", "marker_rgb"):
                     key = "rgb" if self.tactile_input_mode == "rgb_only" else "rgb_marker"
-                    raw = {key: training_image(stream[key])}
+                    raw = {key: rgb_image(stream[key])}
                 else:
                     raw = {"marker": as_numpy(stream["marker"])}
                     if self.tactile_input_mode in DEPTH_DEFORM_SPECS:
@@ -209,11 +207,11 @@ class Policy(BasePolicy):
                         baseline = stream.get("baseline")
                         if baseline is not None:
                             if self.tactile_input_mode in ("rgb_only", "marker_rgb"):
-                                baseline_raw = {key: training_image(baseline[key])}
+                                baseline_raw = {key: rgb_image(baseline[key])}
                             else:
                                 baseline_raw = {k: as_numpy(v) for k, v in baseline.items()}
                         elif self.tactile_input_mode == "rgb_only" and "baseline_rgb" in stream:
-                            baseline_raw = {"rgb": training_image(stream["baseline_rgb"])}
+                            baseline_raw = {"rgb": rgb_image(stream["baseline_rgb"])}
                         else:
                             baseline_raw = raw
                         self.tactile_baselines[side] = native_tactile_from_arrays(baseline_raw, self.tactile_input_mode)

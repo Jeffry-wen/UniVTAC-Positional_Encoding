@@ -39,10 +39,8 @@ def read_native_tactile(h5, side, step, mode="rgb_only"):
     prefix = f"tactile/{side}_tactile"
     if mode in ("rgb_only", "marker_rgb"):
         key = "rgb" if mode == "rgb_only" else "rgb_marker"
-        image = cv2.imdecode(np.frombuffer(h5[f"{prefix}/{key}"][step], np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Cannot decode {h5.filename}:{prefix}/{key}[{step}]")
-        data = {key: cv2.cvtColor(image, cv2.COLOR_BGR2RGB)}
+        from encoder.image_io import read_rgb
+        data = {key: read_rgb(h5[f"{prefix}/{key}"], step)}
     else:
         data = {"marker": h5[f"{prefix}/marker"][step]}
     return native_tactile_from_arrays(data, mode)

@@ -7,6 +7,7 @@ import sys
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 from resources.envs.utils.transforms import *
 from resources.envs.utils.data import HDF5Handler
+from encoder.image_io import read_rgb
 
 import time
 import h5py
@@ -86,9 +87,7 @@ class HDF5Dataset(Dataset):
         data = {}
         for key, path in self.name.items():
             if 'rgb' in path:
-                data[key] = self.handler.stream_to_img(
-                    np.asarray([f[path][real_idx]])
-                ).squeeze(0)[:, :, ::-1].copy()  # OpenCV BGR -> simulator RGB
+                data[key] = read_rgb(f[path], real_idx)
             else:
                 data[key] = f[path][real_idx]
         

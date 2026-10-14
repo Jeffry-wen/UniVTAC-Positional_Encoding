@@ -10,10 +10,13 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from encoder.image_io import (decode_rgb, encode_rgb, image_encoding,
+                              ENCODING_ATTR, LEGACY_ENCODING, STANDARD_ENCODING)
 
 class HDF5Handler:
     @staticmethod
-    def stream_to_img(data, process_transform: Callable[[np.ndarray], np.ndarray] = None) -> np.ndarray:
+    def stream_to_img(data, process_transform: Callable[[np.ndarray], np.ndarray] = None,
+                      encoding=LEGACY_ENCODING) -> np.ndarray:
         """
         将一个字节流数组解码为图像数组。
 
@@ -35,10 +38,8 @@ class HDF5Handler:
             else:
                 raise TypeError(f"Unsupported buffer type: {type(buf)}")
 
-            # 解码成 BGR 图像
-            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if img is None:
-                raise ValueError(f"Failed to decode image from buffer!")
+            # Always return sensor RGB, including unmarked historical files.
+            img = decode_rgb(arr, encoding)
             
             if imgs is None:
                 imgs = np.empty((img_len, *img.shape), dtype=np.uint8)
@@ -53,8 +54,7 @@ class HDF5Handler:
         max_len = 0
         encode_data = []
         for i in range(len(imgs)):
-            success, encoded_image = cv2.imencode(".jpg", imgs[i])
-            jpeg_data = encoded_image.tobytes()
+            jpeg_data = encode_rgb(imgs[i])
             encode_data.append(jpeg_data)
             max_len = max(max_len, len(jpeg_data))
         return encode_data, max_len
@@ -95,7 +95,7 @@ class HDF5Handler:
             if isinstance(item, h5py.Dataset):
                 data = item[()]
                 if "rgb" in name:
-                    result[name] = self.stream_to_img(data)
+                    result[name] = self.stream_to_img(data, encoding=image_encoding(item))
                 else:
                     result[name] = data
             elif isinstance(item, h5py.Group):
@@ -110,7 +110,7 @@ class HDF5Handler:
         for data_path, process_transform in data_paths:
             endpoint = data_path.rsplit('/', 1)[-1]
             if 'rgb' in endpoint:
-                result[data_path] = self.stream_to_img(node[data_path][()], process_transform)
+                result[data_path] = self.stream_to_img(node[data_path][()], process_transform, image_encoding(node[data_path]))
             else:
                 result[data_path] = node[data_path][()] if process_transform else node[data_path][()]
         return result
@@ -141,7 +141,7 @@ class HDF5Handler:
             for data_path, process_transform in data_paths:
                 endpoint = data_path.rsplit('/', 1)[-1]
                 if 'rgb' in endpoint:
-                    data = self.stream_to_img(f[data_path][()], process_transform)
+                    data = self.stream_to_img(f[data_path][()], process_transform, image_encoding(f[data_path]))
                 else:
                     data = process_transform(f[data_path][()]) if process_transform else f[data_path][()]
                 
@@ -176,7 +176,7 @@ class HDF5Handler:
                 for data_path, process_transform in data_paths:
                     endpoint = data_path.rsplit('/', 1)[-1]
                     if 'rgb' in endpoint:
-                        data = self.stream_to_img(f[data_path][()], process_transform)
+                        data = self.stream_to_img(f[data_path][()], process_transform, image_encoding(f[data_path]))
                     else:
                         data = process_transform(f[data_path][()]) if process_transform else f[data_path][()]
 
@@ -215,7 +215,8 @@ class HDF5Handler:
                 if "rgb" in k and encode_images:
                     v = np.array(v)
                     encode_data, max_len = self.img_to_stream(v)
-                    node.create_dataset(k, data=encode_data, dtype=f"S{max_len}")
+                    dataset = node.create_dataset(k, data=encode_data, dtype=f"S{max_len}")
+                    dataset.attrs[ENCODING_ATTR] = STANDARD_ENCODING
                 elif len(v) > 0 and isinstance(v[0], str):
                     max_len = np.max([len(s) for s in v])
                     node.create_dataset(k, data=v, dtype=f'S{max_len}')

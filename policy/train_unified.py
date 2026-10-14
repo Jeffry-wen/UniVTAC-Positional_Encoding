@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "encoder"))
 from modality import DEPTH_DEFORM_SPECS, depth_deform_spec, INPUT_CHANNELS, read_tactile  # noqa: E402
+from encoder.image_io import read_rgb, require_rgb_model
 from policy.joint_actions import encode_joint_actions, joint_action_mode  # noqa: E402
 
 
@@ -265,11 +266,7 @@ class UniVTACDataset(Dataset):
         return (x - np.asarray(s["mean"], dtype=np.float32)) / np.asarray(s["std"], dtype=np.float32)
 
     def _rgb(self, f, key, t):
-        encoded = np.frombuffer(f[key][t], dtype=np.uint8)
-        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f"Failed to decode {f.filename}:{key}[{t}]")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = read_rgb(f[key], t)
         if self.policy == "n0vtla":
             from policy.n0vtla.observation_adapter import resize_rgb
             return resize_rgb(image)
@@ -371,6 +368,8 @@ def run(args):
     torch.manual_seed(args.seed)
     if args.tactile_mode == "encode" and not args.encoder_ckpt:
         raise ValueError("encode mode requires --encoder-ckpt")
+    if args.tactile_mode == "encode" and args.tactile_input_mode in ("rgb_only", "marker_rgb"):
+        require_rgb_model(torch.load(args.encoder_ckpt, map_location="cpu", weights_only=True))
     if args.tactile_mode == "encode" and args.tactile_input_mode in DEPTH_DEFORM_SPECS:
         encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=False)
         if encoder_state.get("depth_deform_encoding") != depth_deform_spec(args.tactile_input_mode):
@@ -450,7 +449,7 @@ def run(args):
         if args.tactile_mode == "encode":
             encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=True)
             config_dump["tactile_encoder_config"] = {key: encoder_state[key] for key in
-                ("method", "size", "architecture", "image_size", "input_mode", "in_chans", "depth_deform_encoding") if key in encoder_state}
+                ("method", "size", "architecture", "image_size", "input_mode", "in_chans", "depth_deform_encoding", "color_order") if key in encoder_state}
         tokenizer = None
     elif args.policy == "n0vtla":
         from transformers import AutoTokenizer
@@ -501,6 +500,7 @@ def run(args):
                        "output_features": {k: list(v.shape) for k, v in config.output_features.items()}}
     if args.tactile_input_mode in DEPTH_DEFORM_SPECS:
         config_dump["depth_deform_encoding"] = depth_deform_spec(args.tactile_input_mode)
+    config_dump["color_order"] = "RGB"
     config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
                                    "batch_size_per_rank": args.batch_size_per_rank}
@@ -588,7 +588,7 @@ def run(args):
                         val_losses.append(float(batch_loss(val_batch, core_model).detach()))
                 print(f"step={step} val_loss={np.mean(val_losses):.6f}", flush=True)
             if args.save_checkpoint and args.rank == 0:
-                torch.save({"format_version": 1, "policy": args.policy,
+                torch.save({"format_version": 2, "color_order": "RGB", "policy": args.policy,
                             "action_mode": args.action_mode,
                             "model": core_model.state_dict(), "optimizer": optimizer.state_dict(),
                             "scheduler": scheduler.state_dict() if scheduler else None,

@@ -19,7 +19,6 @@ from policy.checkpoints import load_run
 
 def hdf5_observation(path, frame, run):
     """Reconstruct sensor-format observations for the shared deployment adapter."""
-    import cv2
     import h5py
     import numpy as np
     import torch
@@ -30,13 +29,8 @@ def hdf5_observation(path, frame, run):
         observation["embodiment"]["joint"] = torch.from_numpy(h5["embodiment/joint"][frame].copy())
 
         def rgb(key, step=frame):
-            image = cv2.imdecode(np.frombuffer(h5[key][step], dtype=np.uint8), cv2.IMREAD_COLOR)
-            if image is None:
-                raise ValueError(f"Cannot decode {path}:{key}[{frame}]")
-            # Collection encoded sensor arrays directly with OpenCV. Decoding
-            # without conversion restores their original channel order; the
-            # deployment adapter then applies the training channel convention.
-            return image
+            from encoder.image_io import read_rgb
+            return read_rgb(h5[key], step)
 
         for key in run["camera_keys"]:
             camera = {"cam_high": "head", "cam_wrist": "wrist"}[key.split(".")[-1]]

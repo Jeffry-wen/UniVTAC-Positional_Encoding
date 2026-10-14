@@ -3,8 +3,10 @@ import cv2
 import numpy as np
 import torch
 if __package__:
+    from .image_io import read_rgb
     from .linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
 else:
+    from image_io import read_rgb
     from linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
 
 
@@ -44,11 +46,7 @@ def read_tactile(h5, side, step, mode, image_size=224):
     prefix = f'tactile/{side}_tactile'
     if mode in ('rgb_only', 'marker_rgb'):
         key = 'rgb' if mode == 'rgb_only' else 'rgb_marker'
-        raw = np.frombuffer(h5[f'{prefix}/{key}'][step], dtype=np.uint8)
-        image = cv2.imdecode(raw, cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError(f'Cannot decode {h5.filename}:{prefix}/{key}[{step}]')
-        data = {key: cv2.cvtColor(image, cv2.COLOR_BGR2RGB)}
+        data = {key: read_rgb(h5[f'{prefix}/{key}'], step)}
     elif mode == 'marker_only':
         data = {'marker': h5[f'{prefix}/marker'][step]}
     elif mode in DEPTH_DEFORM_SPECS:

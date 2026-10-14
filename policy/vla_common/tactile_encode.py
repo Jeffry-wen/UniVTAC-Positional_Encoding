@@ -20,6 +20,9 @@ class TactileEncoder(nn.Module):
             state = dict(config.tactile_encoder_config)
         else:
             raise FileNotFoundError(f"UniVTAC tactile encoder checkpoint missing: {path}")
+        if config.tactile_input_mode in ("rgb_only", "marker_rgb"):
+            from encoder.image_io import require_rgb_model
+            require_rgb_model(state)
         method = state.get("method")
         size = state.get("size")
         if method not in {"ResNet", "VAE", "MAE", "DINOv2", "I-JEPA", "V-JEPA"}:
@@ -61,7 +64,7 @@ class TactileEncoder(nn.Module):
         config.tactile_encoder_config = {
             "method": method, "size": size, "input_mode": state["input_mode"],
             "image_size": self.image_size, "in_chans": state["in_chans"],
-            "tactile_type": self.mode,
+            "tactile_type": self.mode, "color_order": "RGB",
         }
         if 'depth_deform_encoding' in state:
             config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']

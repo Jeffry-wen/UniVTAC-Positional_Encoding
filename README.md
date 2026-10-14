@@ -34,6 +34,16 @@ bash scripts/download_data.sh --contact
 bash scripts/download_data.sh --task --version 51
 ```
 
+### 图像颜色约定
+
+视觉相机和触觉彩色图像（`rgb_only`、`marker_rgb`）在训练、encoder 和推理中统一为 RGB。
+历史 UniVTAC HDF5 无 `image_encoding` 属性，按 RGB 直接交给 OpenCV 编码的历史格式读取，解码后不交换通道。
+新采集在 JPEG 编码前将 RGB 转成 BGR，并为每个图像 dataset 写入 `image_encoding=standard_jpeg`；读取时转回 RGB。
+两种数据可以混合训练，不需要重新采集历史数据。外部标准 JPEG 写入 HDF5 时也必须设置该属性。
+
+新训练的配置和 checkpoint 写入 `color_order=RGB`。旧 BGR 模型不再支持；彩色触觉 encoder 和使用它的策略需重新训练，不能继续使用旧 BGR encoder 或恢复其训练。
+`marker_only` 和 `depth_deform_*` 保持原有物理量通道顺序，不执行红蓝交换。
+
 ### 预训练模型
 
 下载 [Qwen3.5-2B](https://huggingface.co/Qwen/Qwen3.5-2B) 和 [PI0.5](https://huggingface.co/lerobot/pi05_base)：
