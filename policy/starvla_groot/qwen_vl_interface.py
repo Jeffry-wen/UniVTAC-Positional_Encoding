@@ -11,6 +11,7 @@
 # overwatch logger, the fast-token vocabulary, or CoT prompt templating.
 
 import logging
+from types import MethodType
 from typing import List
 
 import torch
@@ -18,6 +19,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
+
+
+def _batched_vision_attention(self, hidden_states, cu_seqlens,
+                              rotary_pos_emb=None, position_embeddings=None, **kwargs):
+    """Batch independent equal-length images; retain HF for all other layouts."""
+    if not (self.training and torch.is_grad_enabled()) or kwargs.get("output_attentions", False):
+        return self._univtac_original_forward(
+            hidden_states, cu_seqlens, rotary_pos_emb=rotary_pos_emb,
+            position_embeddings=position_embeddings, **kwargs)
+    cache = self._univtac_vision_layout
+    # All blocks receive the same cumulative lengths tensor. Inspect it once
+    # per vision forward, rather than synchronizing/splitting in every block.
+    if cache.get("cu_seqlens") is not cu_seqlens:
+        lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+        cache["cu_seqlens"] = cu_seqlens
+        cache["length"] = lengths[0] if lengths and len(set(lengths)) == 1 else None
+    length = cache["length"]
+    if length is None or position_embeddings is None:
+        return self._univtac_original_forward(
+            hidden_states, cu_seqlens, rotary_pos_emb=rotary_pos_emb,
+            position_embeddings=position_embeddings, **kwargs)
+    from transformers.models.qwen3_5.modeling_qwen3_5 import apply_rotary_pos_emb_vision
+
+    total = hidden_states.shape[0]
+    q, k, v = self.qkv(hidden_states).reshape(total, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+    q, k = apply_rotary_pos_emb_vision(q, k, *position_embeddings)
+    batch = total // length
+    q, k, v = [x.reshape(batch, length, self.num_heads, -1).transpose(1, 2) for x in (q, k, v)]
+    output = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attention_dropout,
+                                           is_causal=False, scale=self.scaling)
+    return self.proj(output.transpose(1, 2).reshape(total, -1).contiguous())
 
 
 def _smart_resize(height: int, width: int, factor: int, min_pixels: int, max_pixels: int) -> tuple[int, int]:
@@ -61,6 +93,7 @@ class QwenVLInterface(nn.Module):
         dtype: torch.dtype = torch.bfloat16,
         image_resolution: tuple[int, int] = (224, 224),
         from_config: bool = False,
+        batch_vision_attention: bool = True,
     ):
         super().__init__()
 
@@ -107,6 +140,15 @@ class QwenVLInterface(nn.Module):
             self.model.config.hidden_size = text_config.hidden_size
 
         self._init_gpu_preproc(image_resolution)
+        if batch_vision_attention:
+            visual = getattr(getattr(self.model, "model", None), "visual", None)
+            if visual is not None and type(visual).__name__ == "Qwen3_5VisionModel" and attn_implementation == "sdpa":
+                layout = {}
+                for block in visual.blocks:
+                    attention = block.attn
+                    attention._univtac_original_forward = attention.forward
+                    attention._univtac_vision_layout = layout
+                    attention.forward = MethodType(_batched_vision_attention, attention)
         self.use_cuda_graph = False
         self._text_cuda_graph = None
         self._prefix_cuda_graph = None
@@ -132,7 +174,7 @@ class QwenVLInterface(nn.Module):
         with torch.autocast("cuda", dtype=torch.bfloat16):
             return self._prefix_cuda_graph(images, instructions, extra_embeds)
 
-    def forward_graph_features(self, inputs):
+    def forward_graph_features(self, inputs, *, text_graph=None):
         """Prepare multimodal embeddings eagerly, then replay the text decoder."""
         core = self.model.model
         ids, mask = inputs["input_ids"], inputs["attention_mask"]
@@ -147,7 +189,8 @@ class QwenVLInterface(nn.Module):
             ids, inputs["mm_token_type_ids"],
             image_grid_thw=inputs["image_grid_thw"], attention_mask=mask,
         )[0]
-        return self._text_cuda_graph(embeds, positions, mask)
+        runner = self._text_cuda_graph if text_graph is None else text_graph
+        return runner(embeds, positions, mask)
 
     # ------------------------------------------------------------------
     # GPU image preprocessing (replaces the per-step PIL + HF-processor path)
@@ -239,8 +282,11 @@ class QwenVLInterface(nn.Module):
         return int(self.model.config.hidden_size)
 
     def forward(self, **kwargs):
+        # VLA consumes backbone features only. The generation wrapper projects
+        # every prefix token to the vocabulary, allocating unused [B, L, V]
+        # logits. Keep the registered wrapper/weights for checkpoint compatibility.
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            return self.model(**kwargs)
+            return self.model.model(**kwargs)
 
     def supports_prefix_injection(self) -> bool:
         """Whether the backbone exposes the Qwen3.5-style API needed to inject extra
@@ -252,7 +298,7 @@ class QwenVLInterface(nn.Module):
                       "get_input_embeddings")
         )
 
-    def forward_with_prefix_tokens(self, images: List[list], instructions: List[str], extra_embeds):
+    def forward_with_prefix_tokens(self, images: List[list], instructions: List[str], extra_embeds, *, return_hidden_states: bool = False, text_graph=None):
         """Run the VLM with ``extra_embeds`` injected into the LLM input sequence.
 
         ``extra_embeds`` (``[B, N, H]``) are placed at the end of the prompt as ``N``
@@ -260,6 +306,8 @@ class QwenVLInterface(nn.Module):
         encoder-side fusion), as opposed to being appended to the VLM output. Image
         features are merged by the model's own helpers and the extra tokens receive
         proper (text-continuation) M-RoPE positions.
+
+        Set return_hidden_states=True to return all layer states instead of the final one.
 
         Returns ``(last_hidden_state, attention_mask)`` over the full
         ``image + language + extra`` sequence.
@@ -326,16 +374,22 @@ class QwenVLInterface(nn.Module):
             inputs_embeds = inputs_embeds.clone()
             inputs_embeds[:, seq_len:, :] = extra_embeds.to(inputs_embeds.dtype)
 
-            if self.use_cuda_graph and self._text_cuda_graph is not None:
+            if return_hidden_states and text_graph is not None:
+                return text_graph(inputs_embeds, position_ids, attn_ext), attn_ext.to(dtype=torch.bool)
+            if not return_hidden_states and self.use_cuda_graph and self._text_cuda_graph is not None:
                 last_hidden = self._text_cuda_graph(inputs_embeds, position_ids, attn_ext)
             else:
                 outputs = core(
                     inputs_embeds=inputs_embeds,
                     attention_mask=attn_ext,
                     position_ids=position_ids,
+                    output_hidden_states=return_hidden_states,
+                    return_dict=True,
                     use_cache=False,
                 )
                 last_hidden = outputs.last_hidden_state
+        if return_hidden_states:
+            return outputs.hidden_states, attn_ext.to(dtype=torch.bool)
         return last_hidden, attn_ext.to(dtype=torch.bool)
 
     def build_qwenvl_inputs(self, images: torch.Tensor, instructions: List[str], **kwargs) -> dict:

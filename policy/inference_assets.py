@@ -5,7 +5,7 @@ from pathlib import Path
 def export_assets(directory, policy, *, qwen=None, tokenizer=None):
     """Export HF objects; deliberately exclude backbone weights and optimizer state."""
     directory = Path(directory)
-    if policy == "starvla_groot":
+    if policy in ("starvla_groot", "starvla_pi"):
         relative = "inference_assets/qwen"
         target = directory / relative
         target.mkdir(parents=True, exist_ok=True)

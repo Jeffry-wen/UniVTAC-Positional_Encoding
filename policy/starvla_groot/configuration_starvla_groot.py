@@ -41,13 +41,14 @@ class StarvlaGrootConfig(SensorRoutingMixin, PreTrainedConfig):
     dtype: str = "bfloat16"  # backbone load dtype: "bfloat16" | "float32"
 
     n_obs_steps: int = 1
-    chunk_size: int = 32  # action_horizon: number of action steps predicted by the head
-    n_action_steps: int = 16  # number of action steps executed before re-planning
+    chunk_size: int = 50  # action_horizon: number of action steps predicted by the head
+    n_action_steps: int = 30  # number of action steps executed before re-planning
 
     # === Action head (GR00T flow-matching / DiT) ===
     action_model_type: str = "DiT-B"  # "DiT-B" | "DiT-L"
     action_head_hidden_size: int = 1024  # MLP width for state_encoder / action_decoder
-    num_inference_timesteps: int = 4  # denoising Euler steps at inference
+    action_expert_hidden_size: int | None = 1024  # None restores historical DiT preset widths
+    num_inference_timesteps: int = 10  # denoising Euler steps at inference
     repeated_diffusion_steps: int = 1  # inference-time ensemble size: number of noise
     # initializations denoised in parallel at inference and averaged into one action chunk.
     # Training forwards a single noise sample per element (use a larger batch_size to reduce
@@ -103,6 +104,7 @@ class StarvlaGrootConfig(SensorRoutingMixin, PreTrainedConfig):
 
     # Training settings
     gradient_checkpointing: bool = False
+    training_batch_vision_attention: bool = True
     device: str | None = None
 
     # Finetuning settings
@@ -122,6 +124,9 @@ class StarvlaGrootConfig(SensorRoutingMixin, PreTrainedConfig):
 
     def __post_init__(self):
         super().__post_init__()
+
+        if self.action_expert_hidden_size is not None and self.action_expert_hidden_size < 1:
+            raise ValueError("action_expert_hidden_size must be positive or None")
 
         if self.cuda_graph_warmup_steps < 1 or self.cuda_graph_max_graphs < 1:
             raise ValueError("CUDA Graph warmup steps and cache size must be positive")

@@ -151,7 +151,7 @@ class Qwen35TextCudaGraph(TensorCudaGraph):
 
 class _PrefixPlan:
     """Immutable prompt/grid metadata, prepared before capture without HF patches."""
-    def __init__(self, qv, images, instructions, extra):
+    def __init__(self, qv, images, instructions, extra, *, text_compute=None):
         from transformers.masking_utils import create_causal_mask
 
         self.qv = qv
@@ -196,7 +196,7 @@ class _PrefixPlan:
             attention_mask=mask, past_key_values=None, position_ids=None,
         )
         self.linear_mask = core.language_model._update_linear_attn_mask(mask, None)
-        self.text_compute = Qwen35TextCudaGraph(core.language_model)
+        self.text_compute = text_compute if text_compute is not None else Qwen35TextCudaGraph(core.language_model)
 
     def forward(self, images, extra):
         qv, visual = self.qv, self.core.visual
@@ -224,8 +224,9 @@ class Qwen35PrefixCudaGraph:
     Each prompt tuple owns its metadata and graph. Unlike the reference's
     class-wide monkey patches, constants cannot leak between policy instances.
     """
-    def __init__(self, qv, warmup_steps=3, max_graphs=2):
+    def __init__(self, qv, warmup_steps=3, max_graphs=2, *, plan_factory=_PrefixPlan):
         self.qv = qv
+        self.plan_factory = plan_factory
         self.warmup_steps, self.max_graphs = warmup_steps, max_graphs
         self.entries = {}
         self.captures = 0
@@ -247,7 +248,7 @@ class Qwen35PrefixCudaGraph:
             if len(self.entries) >= self.max_graphs:
                 self.eager_calls += 1
                 return None
-            plan = _PrefixPlan(self.qv, images, instructions, extra)
+            plan = self.plan_factory(self.qv, images, instructions, extra)
             runner = TensorCudaGraph(self.qv, plan.forward, self.warmup_steps, max_graphs=1)
             entry = (plan, runner)
             self.entries[key] = entry

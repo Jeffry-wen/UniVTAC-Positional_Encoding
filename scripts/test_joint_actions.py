@@ -52,7 +52,7 @@ class JointActionTests(unittest.TestCase):
         return dataset
 
     def test_dataset_anchor_and_padding(self):
-        for kind in ("act", "pi05", "starvla_groot"):
+        for kind in ("act", "pi05", "starvla_groot", "starvla_pi"):
             absolute, relative = self.dataset("absolute", kind), self.dataset("relative", kind)
             for t in range(3):
                 target = absolute[t]["action"].numpy().copy()
@@ -85,16 +85,17 @@ class JointActionTests(unittest.TestCase):
         self.assertTrue(np.isfinite(sampled["q01"]).all())
 
     def test_vla_configs_accept_relative_joint(self):
-        for kind in ("pi05", "starvla_groot"):
+        for kind in ("pi05", "starvla_groot", "starvla_pi"):
             args = SimpleNamespace(policy=kind, image_size=224, tactile_mode="none",
                                    tactile_input_mode="rgb_only", tactile_type="cls", encoder_ckpt=None,
                                    tactile_insert_location="decoder", action_mode="relative_joint",
-                                   device="cpu", chunk_size=32)
+                                   device="cpu", chunk_size=32, n_action_steps=30)
             base = yaml.safe_load((ROOT / "policy" / kind / "base_config.yml").read_text())
             config = make_config(args, base, ["observation.images.cam_high"], [])
             config.validate_features()
             self.assertEqual(config.action_mode, "relative_joint")
             self.assertEqual(config.state_mode, "absolute_joint")
+            self.assertEqual(config.n_action_steps, 30)
 
     def make_policy(self, mode, kind="starvla_groot", temporal=False):
         policy = Policy.__new__(Policy)
@@ -115,7 +116,7 @@ class JointActionTests(unittest.TestCase):
 
     def test_deployment_denormalizes_then_decodes(self):
         observation = {"embodiment": {"joint": self.joints[0]}}
-        for kind in ("act", "pi05", "starvla_groot"):
+        for kind in ("act", "pi05", "starvla_groot", "starvla_pi"):
             for mode in ("absolute", "relative"):
                 policy = self.make_policy(mode, kind)
                 # Exercise both quantile and standard normalization inverses.

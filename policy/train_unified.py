@@ -9,6 +9,7 @@ import json
 import os
 import random
 import sys
+import time
 import traceback
 from collections import defaultdict
 from pathlib import Path
@@ -259,7 +260,7 @@ class UniVTACDataset(Dataset):
 
     def _norm(self, x, name):
         s = self.stats[name]
-        if self.policy in ("pi05", "n0vtla"):
+        if self.policy in ("pi05", "n0vtla", "starvla_pi"):
             low = np.asarray(s["q01"], dtype=np.float32)
             high = np.asarray(s["q99"], dtype=np.float32)
             return 2 * (x - low) / np.maximum(high - low, 1e-6) - 1
@@ -327,10 +328,11 @@ def select_tasks(args):
 
 
 def make_config(args, base, camera_keys, tactile_keys):
+    base = dict(base, chunk_size=args.chunk_size, n_action_steps=args.n_action_steps)
     if args.policy == "n0vtla":
         from policy.n0vtla.configuration_n0vtla import N0PolicyConfig
         return N0PolicyConfig(**{**base, "chunk_size": args.chunk_size,
-                               "n_action_steps": min(base["n_action_steps"], args.chunk_size)})
+                               "n_action_steps": args.n_action_steps})
     from policy.vla_common.engine.configs import FeatureType, PolicyFeature
     features = {key: PolicyFeature(FeatureType.VISUAL, (3, args.image_size, args.image_size)) for key in camera_keys}
     features["observation.state"] = PolicyFeature(FeatureType.STATE, (8,))
@@ -356,6 +358,9 @@ def make_config(args, base, camera_keys, tactile_keys):
     common["base_vlm"] = str(ROOT / "resources" / "pretrained_models" / "Qwen3.5-2B")
     common["action_dim"] = 8
     common["state_dim"] = 8
+    if args.policy == "starvla_pi":
+        from policy.starvla_pi import StarvlaPiConfig
+        return StarvlaPiConfig(**common)
     return StarvlaGrootConfig(**common)
 
 
@@ -410,6 +415,8 @@ def run(args):
         sampler = WeightedRandomSampler(weights, len(train_ds), replacement=True) if args.training_mode == "multi_task" else None
     # Spawn avoids forking after CUDA/NCCL has been initialized.
     loader_options = {"multiprocessing_context": "spawn"} if args.workers else {}
+    if args.workers and args.policy in ("starvla_groot", "starvla_pi"):
+        loader_options["persistent_workers"] = True
     loader = DataLoader(train_ds, batch_size=args.batch_size_per_rank, shuffle=sampler is None,
                         sampler=sampler, num_workers=args.workers, pin_memory=True, drop_last=True,
                         generator=torch.Generator().manual_seed(args.seed + args.rank), **loader_options)
@@ -427,7 +434,7 @@ def run(args):
         sys.path.insert(0, str(ROOT / "policy" / "ACT"))
         from act_policy import ACTPolicy
         base = yaml.safe_load((ROOT / "policy" / "ACT" / "base_config.yml").read_text())
-        base.update(chunk_size=args.chunk_size, camera_names=["cam_high" if c == "head" else "cam_wrist" for c in cameras],
+        base.update(chunk_size=args.chunk_size, n_action_steps=args.n_action_steps, camera_names=["cam_high" if c == "head" else "cam_wrist" for c in cameras],
                     tactile_names=["tac_left", "tac_right"] if args.tactile_mode != "none" else [],
                     tactile_ckpt=str(args.encoder_ckpt) if args.tactile_mode == "encode" else None,
                     tactile_input_mode=args.tactile_input_mode, tactile_type=args.tactile_type,
@@ -455,6 +462,7 @@ def run(args):
         from transformers import AutoTokenizer
         from policy.n0vtla.modeling_n0vtla import N0Policy
         base = yaml.safe_load((ROOT / "policy/n0vtla/base_config.yml").read_text())
+        base.update(chunk_size=args.chunk_size, n_action_steps=args.n_action_steps)
         config = make_config(args, base, camera_keys, tactile_keys)
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, local_files_only=True)
         model = N0Policy(config)
@@ -472,6 +480,7 @@ def run(args):
                        "routing": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}}
     else:
         base = yaml.safe_load((ROOT / "policy" / args.policy / "base_config.yml").read_text())
+        base.update(chunk_size=args.chunk_size, n_action_steps=args.n_action_steps)
         config = make_config(args, base, camera_keys, tactile_keys)
         config.validate_features()
         if args.policy == "pi05":
@@ -482,14 +491,20 @@ def run(args):
         else:
             from policy.starvla_groot.modeling_starvla_groot import StarvlaGrootPolicy
             tokenizer = None
-            model = StarvlaGrootPolicy(config)
+            if args.policy == "starvla_pi":
+                from policy.starvla_pi.modeling_starvla_pi import StarvlaPiPolicy
+                model = StarvlaPiPolicy(config)
+            else:
+                model = StarvlaGrootPolicy(config)
         model.to(args.device)
         # Keep update/clipping order stable when a policy orders its modules
         # differently to overlap DDP communication with backward computation.
         optim_params = list(model.get_optim_params())
         optimizer = torch.optim.AdamW(optim_params, lr=config.optimizer_lr,
                                       betas=tuple(config.optimizer_betas), eps=config.optimizer_eps,
-                                      weight_decay=config.optimizer_weight_decay)
+                                      weight_decay=config.optimizer_weight_decay,
+                                      fused=(str(args.device).startswith("cuda") and
+                                             args.policy in ("starvla_groot", "starvla_pi")))
         scheduler = config.get_scheduler_preset().build(optimizer, args.steps)
         config_dump = {"policy": args.policy, "base": base,
                        "chunk_size": config.chunk_size,
@@ -501,14 +516,15 @@ def run(args):
     if args.tactile_input_mode in DEPTH_DEFORM_SPECS:
         config_dump["depth_deform_encoding"] = depth_deform_spec(args.tactile_input_mode)
     config_dump["color_order"] = "RGB"
-    config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1)
+    config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1,
+                       n_action_steps=args.n_action_steps)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
                                    "batch_size_per_rank": args.batch_size_per_rank}
     if args.rank == 0:
         output.mkdir(parents=True, exist_ok=True)
         from policy.inference_assets import export_assets
         inference = export_assets(output, args.policy,
-            qwen=model.qwen_vl if args.policy == "starvla_groot" else None,
+            qwen=model.qwen_vl if args.policy in ("starvla_groot", "starvla_pi") else None,
             tokenizer=tokenizer)
         if inference is not None:
             config_dump["inference"] = inference
@@ -548,11 +564,15 @@ def run(args):
             cam = (cam - mean) / std
             tac = torch.stack([batch[k] for k in tactile_keys], dim=1) if args.tactile_mode != "none" else torch.empty(0, device=args.device)
             return forward_model(batch["observation.state"], cam, tac, batch["action"], batch["is_pad"])["loss"]
+        if args.policy in ("starvla_groot", "starvla_pi"):
+            return forward_model(batch, return_loss_dict=False)[0]
         return forward_model(batch)[0]
 
     epoch = 0
     train_iter = iter(loader)
+    log_start, last_log_step, data_wait_seconds = time.perf_counter(), 0, 0.0
     for step in range(1, args.steps + 1):
+        data_start = time.perf_counter()
         try:
             batch = next(train_iter)
         except StopIteration:
@@ -561,6 +581,7 @@ def run(args):
                 sampler.set_epoch(epoch)
             train_iter = iter(loader)
             batch = next(train_iter)
+        data_wait_seconds += time.perf_counter() - data_start
         model.train()
         optimizer.zero_grad(set_to_none=True)
         loss = batch_loss(batch, model)
@@ -576,7 +597,12 @@ def run(args):
                 dist.all_reduce(mean_loss)
                 mean_loss /= args.world_size
             if args.rank == 0:
-                print(f"step={step} loss={float(mean_loss):.6f} lr={optimizer.param_groups[0]['lr']:.3g}", flush=True)
+                value = float(mean_loss)  # Also waits for this logging window's GPU work.
+                elapsed = time.perf_counter() - log_start
+                count = step - last_log_step
+                print(f"step={step} loss={value:.6f} lr={optimizer.param_groups[0]['lr']:.3g} "
+                      f"step/s={count / elapsed:.3f} data_wait_ms={1000 * data_wait_seconds / count:.1f}", flush=True)
+            log_start, last_log_step, data_wait_seconds = time.perf_counter(), step, 0.0
         if step % args.save_freq == 0 or step == args.steps:
             if val_loader and args.max_val_batches:
                 model.eval()
@@ -595,13 +621,15 @@ def run(args):
                             "step": step}, output / f"checkpoint_{step}.pt")
             if args.world_size > 1:
                 dist.barrier()
+            # Report training throughput separately from validation/checkpoint I/O.
+            log_start, last_log_step, data_wait_seconds = time.perf_counter(), step, 0.0
     if args.rank == 0:
         print(f"Finished: {output}")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--policy", choices=["act", "pi05", "starvla_groot", "n0vtla"], required=True)
+    p.add_argument("--policy", choices=["act", "pi05", "starvla_groot", "starvla_pi", "n0vtla"], required=True)
     p.add_argument("--pretrained-path", type=Path, default=ROOT / "resources/pretrained_models/n0-vtla-base")
     p.add_argument("--tokenizer-path", type=Path,
                    default=ROOT / "resources/pretrained_models/pi05_base/paligemma-3b-pt-224-tokenizer")
@@ -620,7 +648,9 @@ def main():
     p.add_argument("--encoder-size", choices=["S", "B"], default="S")
     p.add_argument("--cameras", choices=["auto", "head", "all"], default="auto")
     p.add_argument("--image-size", type=int, default=224)
-    p.add_argument("--chunk-size", type=int, required=True)
+    p.add_argument("--chunk-size", type=int, default=50)
+    p.add_argument("--n-action-steps", type=int, default=30,
+                   help="Actions executed before replanning (must be in [1, chunk-size])")
     p.add_argument("--steps", type=int, required=True)
     p.add_argument("--batch-size", type=int, required=True, help="Global batch size, divided across DDP ranks")
     p.add_argument("--workers", type=int, default=4)
@@ -634,6 +664,8 @@ def main():
     args = p.parse_args()
     if args.steps < 1 or args.batch_size < 1 or args.chunk_size < 1:
         p.error("steps, batch-size, and chunk-size must be positive")
+    if not 1 <= args.n_action_steps <= args.chunk_size:
+        p.error("n-action-steps must be between 1 and chunk-size")
     if args.workers < 0 or args.log_freq < 1 or args.save_freq < 1:
         p.error("workers must be nonnegative; log-freq and save-freq must be positive")
     try:

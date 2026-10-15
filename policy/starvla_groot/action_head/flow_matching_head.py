@@ -40,9 +40,9 @@ class ActionHeadConfig:
     action_dim: int = 7
     state_dim: int = 7
     # Chunk length predicted by the head.
-    action_horizon: int = 8
+    action_horizon: int = 50
     # Denoising (Euler) steps at inference.
-    num_inference_timesteps: int = 4
+    num_inference_timesteps: int = 10
     # Learnable planning query tokens prepended before the action sequence.
     num_target_vision_tokens: int = 32
     # Positional embedding over the action sequence.
@@ -55,6 +55,7 @@ class ActionHeadConfig:
     num_timestep_buckets: int = 1000
     # DiT transformer sub-config. cross_attention_dim is aligned to VLM hidden at runtime.
     diffusion_model_cfg: dict = field(default_factory=dict)
+    expert_hidden_size: int | None = None
 
 
 # Base DiT shapes, identical to the starVLA original.
@@ -122,10 +123,16 @@ class FlowmatchingActionHead(nn.Module):
         super().__init__()
         self.config = config
 
-        action_model_cfg = DiTConfig[config.action_model_type]
-        self.input_embedding_dim = action_model_cfg["input_embedding_dim"]
-
+        action_model_cfg = dict(DiTConfig[config.action_model_type])
         diffusion_model_cfg = {**action_model_cfg, **dict(config.diffusion_model_cfg)}
+        if config.expert_hidden_size is not None:
+            width = config.expert_hidden_size
+            head_dim = int(config.diffusion_model_cfg.get("attention_head_dim", 64))
+            if width % head_dim:
+                raise ValueError("expert_hidden_size must be divisible by attention_head_dim")
+            diffusion_model_cfg.update(input_embedding_dim=width, num_attention_heads=width // head_dim,
+                                       attention_head_dim=head_dim)
+        self.input_embedding_dim = diffusion_model_cfg["input_embedding_dim"]
         self.model = DiT(**diffusion_model_cfg)
 
         self.action_horizon = int(config.action_horizon)

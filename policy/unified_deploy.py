@@ -60,7 +60,11 @@ def make_vla_config(run, device, models_root):
         tactile_encoder_path=None, tactile_encoder_config=saved.get("tactile_encoder_config"),
         state_mode=saved["state_mode"], action_mode=options["action_mode"], action_gap=saved["action_gap"])
     common["chunk_size"] = saved.get("chunk_size", saved["base"].get("chunk_size", options["chunk_size"]))
-    if run["policy"] == "starvla_groot":
+    if "n_action_steps" in saved:
+        common["n_action_steps"] = saved["n_action_steps"]
+    if run["policy"] in ("starvla_groot", "starvla_pi"):
+        from policy.starvla_groot.architecture import restore_starvla_architecture
+        common = restore_starvla_architecture(common, run["policy"])
         from policy.starvla_groot.configuration_starvla_groot import StarvlaGrootConfig
         bundled = asset_path(run, "qwen_path")
         # Inference defaults supersede historical training/checkpoint settings.
@@ -68,6 +72,9 @@ def make_vla_config(run, device, models_root):
         common.update(base_vlm=str(bundled or models_root / "Qwen3.5-2B"),
                       vlm_from_config=bundled is not None, action_dim=8, state_dim=8,
                       use_cuda_graph=True, repeated_diffusion_steps=1)
+        if run["policy"] == "starvla_pi":
+            from policy.starvla_pi import StarvlaPiConfig
+            return StarvlaPiConfig(**common)
         return StarvlaGrootConfig(**common)
     from policy.pi05.configuration_pi05 import PI05Config
     common["paligemma_tokenizer_path"] = str(asset_path(run, "tokenizer_path") or
@@ -115,7 +122,7 @@ class Policy(BasePolicy):
             self.model = ACTPolicy(config).to(self.device)
             self.chunk_size = config["chunk_size"]
             self.temporal_agg = bool(config.get("temporal_agg", False))
-            default_horizon = 1
+            default_horizon = config.get("n_action_steps", 1)
         elif self.kind == "n0vtla":
             from transformers import AutoTokenizer
             from .n0vtla.configuration_n0vtla import N0PolicyConfig
@@ -128,7 +135,11 @@ class Policy(BasePolicy):
             default_horizon = config.n_action_steps
         else:
             config = make_vla_config(self.run, self.device, models_root)
-            if self.kind == "starvla_groot":
+            if self.kind == "starvla_pi":
+                from policy.starvla_pi.modeling_starvla_pi import StarvlaPiPolicy
+                config.use_cuda_graph = args.get("use_cuda_graph", config.use_cuda_graph)
+                self.model = StarvlaPiPolicy(config).to(self.device)
+            elif self.kind == "starvla_groot":
                 from policy.starvla_groot.modeling_starvla_groot import StarvlaGrootPolicy
                 config.use_cuda_graph = args.get("use_cuda_graph", config.use_cuda_graph)
                 config.repeated_diffusion_steps = args.get("repeated_diffusion_steps", config.repeated_diffusion_steps)
@@ -171,7 +182,7 @@ class Policy(BasePolicy):
     def normalize_state(self, state):
         state = np.asarray(state, dtype=np.float32)
         stats = self.stats["state"]
-        if self.kind in ("pi05", "n0vtla"):
+        if self.kind in ("pi05", "n0vtla", "starvla_pi"):
             low, high = np.asarray(stats["q01"], np.float32), np.asarray(stats["q99"], np.float32)
             return 2 * (state - low) / np.maximum(high - low, 1e-6) - 1
         return (state - np.asarray(stats["mean"], np.float32)) / np.asarray(stats["std"], np.float32)
@@ -256,7 +267,7 @@ class Policy(BasePolicy):
         if normalized.shape != (1, self.chunk_size, 8) or not torch.isfinite(normalized).all():
             raise ValueError(f"Invalid action chunk: shape={tuple(normalized.shape)}")
         stats = self.stats["action"]
-        if self.kind in ("pi05", "n0vtla"):
+        if self.kind in ("pi05", "n0vtla", "starvla_pi"):
             low, high = normalized.new_tensor(stats["q01"]), normalized.new_tensor(stats["q99"])
             actions = (normalized + 1) * (high - low).clamp_min(1e-6) / 2 + low
         else:

@@ -80,7 +80,7 @@ CUDA_VISIBLE_DEVICES=0 bash train_encoder.sh \
 
 ### Policy
 
-- 模型（`POLICY`）：`act`（ACT）、`pi05`（PI0.5）、`starvla_groot`（StarVLA-GR00T）。
+- 模型（`POLICY`）：`act`（ACT）、`pi05`（PI0.5）、`starvla_groot`（StarVLA-GR00T）、`starvla_pi`（StarVLA-PI，逐层 flow-matching 动作头）。
 - 触觉模式（`TACTILE_MODE`）：`none / as_image / encode`。
 - 表示方式（`TACTILE_INPUT_MODE`）：`marker_only / rgb_only / marker_rgb / depth_deform`，与 Encoder 相同。
 - `encode` 模式：`ENCODER_METHOD` 和 `ENCODER_SIZE` 与上述 Encoder 选项相同；`TACTILE_TYPE=cls / full` 分别使用全局特征或完整 token 序列，`TACTILE_INSERT_LOCATION=encoder / decoder` 指定插入位置。

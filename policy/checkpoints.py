@@ -96,7 +96,7 @@ def load_run(path, step=None):
     elif options["action_mode"] == "relative_joint":
         raise ValueError("Relative joint checkpoints require action_space metadata in dataset_stats.json")
     policy = options.get("policy", config.get("policy", "act"))
-    if policy not in ("act", "pi05", "starvla_groot", "n0vtla"):
+    if policy not in ("act", "pi05", "starvla_groot", "starvla_pi", "n0vtla"):
         raise ValueError(f"Unsupported unified checkpoint policy: {policy}")
     if "input_features" in config:
         camera_keys = [key for key in config["input_features"]

@@ -257,6 +257,10 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
         with open(config_file) as f:
             config = json.load(f)
 
+        if config.get("type") in ("starvla_groot", "starvla_pi"):
+            from policy.starvla_groot.architecture import restore_starvla_architecture
+            config = restore_starvla_architecture(config, config["type"])
+
         config.pop("type")
         with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".json") as f:
             json.dump(config, f)

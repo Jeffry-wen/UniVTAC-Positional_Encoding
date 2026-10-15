@@ -29,7 +29,7 @@ def discover(root):
 
 def validate_assets(run):
     from transformers import AutoConfig, AutoProcessor, AutoTokenizer
-    if run["policy"] == "starvla_groot":
+    if run["policy"] in ("starvla_groot", "starvla_pi"):
         path = asset_path(run, "qwen_path")
         AutoConfig.from_pretrained(path, local_files_only=True)
         AutoProcessor.from_pretrained(path, local_files_only=True)
@@ -47,7 +47,7 @@ def main():
     root = args.root.expanduser().resolve()
     if not root.is_dir():
         parser.error(f"Missing results root: {root}")
-    runs = [run for run in discover(root) if run["policy"] in ("starvla_groot", "pi05")]
+    runs = [run for run in discover(root) if run["policy"] in ("starvla_groot", "starvla_pi", "pi05")]
     # Check every destination before making changes; do not overwrite untracked assets.
     for run in runs:
         if run["config"].get("inference") is None and (run["directory"] / "inference_assets").exists():
@@ -62,7 +62,7 @@ def main():
         resources = {}
         # Load metadata and processors only, never the original model weights.
         for policy in {run["policy"] for run in runs if not run["config"].get("inference")}:
-            if policy == "starvla_groot":
+            if policy in ("starvla_groot", "starvla_pi"):
                 source = models / "Qwen3.5-2B"
                 resources[policy] = dict(qwen=SimpleNamespace(
                     processor=AutoProcessor.from_pretrained(source, local_files_only=True),

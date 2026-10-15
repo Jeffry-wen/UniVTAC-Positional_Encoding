@@ -27,13 +27,13 @@ spec.loader.exec_module(collection_data)
 
 class PolicyInputTests(unittest.TestCase):
     def test_training_live_and_offline_parity(self):
-        for kind, image_size in (("act", 256), ("pi05", 224), ("starvla_groot", 224), ("n0vtla", 224)):
+        for kind, image_size in (("act", 256), ("pi05", 224), ("starvla_groot", 224), ("starvla_pi", 224), ("n0vtla", 224)):
             for mode in ("marker_rgb", "rgb_only"):
                 with self.subTest(policy=kind, mode=mode), tempfile.TemporaryDirectory() as tmp:
                     self.check_parity(Path(tmp) / "demo.hdf5", kind, image_size, mode)
 
     def test_primary_color_channel_order(self):
-        for kind, image_size in (("act", 256), ("pi05", 224), ("starvla_groot", 224), ("n0vtla", 224)):
+        for kind, image_size in (("act", 256), ("pi05", 224), ("starvla_groot", 224), ("starvla_pi", 224), ("n0vtla", 224)):
             with self.subTest(policy=kind), tempfile.TemporaryDirectory() as tmp:
                 self.check_parity(Path(tmp) / "primary.hdf5", kind, image_size, "marker_rgb",
                                   colors=([255, 0, 0], [0, 255, 0], [0, 0, 255], [240, 80, 20]))

@@ -49,6 +49,7 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
         super().__init__(config)
         config.validate_features()
         self.config = config
+        torch.backends.cuda.matmul.allow_tf32 = False
 
         # Resolve action / state dims from dataset features (real, un-padded dims).
         action_dim = config.action_dim or int(config.output_features[ACTION].shape[0])
@@ -76,6 +77,7 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             attn_implementation=config.attn_implementation,
             dtype=load_dtype,
             image_resolution=config.image_resolution,
+            batch_vision_attention=config.training_batch_vision_attention,
         )
         if self.qwen_vl._text_cuda_graph is not None:
             self.qwen_vl._text_cuda_graph.warmup_steps = config.cuda_graph_warmup_steps
@@ -103,6 +105,7 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
             noise_s=config.noise_s,
             num_timestep_buckets=config.num_timestep_buckets,
             diffusion_model_cfg=diffusion_model_cfg,
+            expert_hidden_size=config.action_expert_hidden_size,
         )
         self.action_head = FlowmatchingActionHead(head_cfg)
         self._action_cuda_graph = ActionHeadCudaGraph(
@@ -310,6 +313,7 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
                     output_attentions=False,
                     output_hidden_states=True,
                     return_dict=True,
+                    use_cache=False,
                 )
                 last_hidden = outputs.hidden_states[-1]  # [B, L, H]
 
@@ -333,7 +337,8 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
     # ------------------------------------------------------------------
     # Training / inference
     # ------------------------------------------------------------------
-    def forward(self, batch: dict[str, Tensor], reduction: str = "mean") -> tuple[Tensor, dict]:
+    def forward(self, batch: dict[str, Tensor], reduction: str = "mean", *,
+                return_loss_dict: bool = True) -> tuple[Tensor, dict]:
         last_hidden, attention_mask = self._encode_prefix(batch)
 
         with torch.autocast("cuda", dtype=torch.float32):
@@ -348,13 +353,12 @@ class StarvlaGrootPolicy(PreTrainedPolicy):
                 last_hidden, actions_target, state, encoder_attention_mask=attention_mask
             )  # (B,)
 
-        loss_dict = {"action_loss": per_sample_loss.mean().item()}
-        if reduction == "none":
-            loss_dict["loss"] = per_sample_loss.mean().item()
-            return per_sample_loss, loss_dict
         loss = per_sample_loss.mean()
-        loss_dict["loss"] = loss.item()
-        return loss, loss_dict
+        # The trainer logs the loss at its own cadence. Avoid synchronizing the
+        # GPU here when it does not consume Python-valued auxiliary metrics.
+        value = loss.item() if return_loss_dict else None
+        loss_dict = {"action_loss": value, "loss": value} if return_loss_dict else {}
+        return (per_sample_loss, loss_dict) if reduction == "none" else (loss, loss_dict)
 
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor], **kwargs) -> Tensor:

@@ -1,7 +1,9 @@
-chunk_size: 32
-n_action_steps: 16
+chunk_size: 50
+n_action_steps: 30
+num_inference_timesteps: 10
 action_model_type: DiT-B
 action_head_hidden_size: 1024
+action_expert_hidden_size: 1024
 num_target_vision_tokens: 32
 dtype: bfloat16
 attn_implementation: sdpa

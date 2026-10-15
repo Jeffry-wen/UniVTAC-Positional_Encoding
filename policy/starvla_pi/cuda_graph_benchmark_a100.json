@@ -1,0 +1,220 @@
+[
+  {
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "torch": "2.7.0+cu126",
+    "layerwise_num_layers": 24,
+    "chunk_size": 32,
+    "denoise_steps": 10,
+    "tactile_mode": "encode",
+    "tactile_type": "full",
+    "tactile_insert_location": "encoder",
+    "timing": "synchronized wall time; alternating AB/BA; capture excluded",
+    "capture_and_first_replay_ms": 1593.5416989959776,
+    "comparisons": [
+      {
+        "observation": 0,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 0,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 0,
+        "seed": 42,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 42,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 42,
+        "max_abs": 0.0
+      }
+    ],
+    "owned_output": true,
+    "same_rng_progression": true,
+    "fresh_noise": true,
+    "latency": {
+      "predict_action_chunk": {
+        "eager": {
+          "median_ms": 260.74821758084,
+          "p95_ms": 299.67760073486716
+        },
+        "graph": {
+          "median_ms": 98.49744685925543,
+          "p95_ms": 107.66298136441037
+        },
+        "speedup": 2.6472586437029912
+      },
+      "deployment_predict_chunk": {
+        "eager": {
+          "median_ms": 251.5816589584574,
+          "p95_ms": 274.24221065593883
+        },
+        "graph": {
+          "median_ms": 101.67851892765611,
+          "p95_ms": 108.22644233703613
+        },
+        "speedup": 2.474285243449079
+      }
+    },
+    "graphs": {
+      "_chunk_cuda_graph": {
+        "captures": 1,
+        "replays": 33,
+        "eager_calls": 0
+      },
+      "_action_cuda_graph": {
+        "captures": 0,
+        "replays": 0,
+        "eager_calls": 0
+      },
+      "_layerwise_prefix_cuda_graph": {
+        "captures": 1,
+        "replays": 33,
+        "eager_calls": 0
+      },
+      "_layerwise_text_cuda_graph": {
+        "captures": 0,
+        "replays": 0,
+        "eager_calls": 0
+      }
+    },
+    "weight_note": "pretrained Qwen3.5-2B; randomly initialized action head and VAE, inference correctness/performance only"
+  },
+  {
+    "gpu": "NVIDIA A100-SXM4-80GB",
+    "torch": "2.7.0+cu126",
+    "layerwise_num_layers": 24,
+    "chunk_size": 32,
+    "denoise_steps": 10,
+    "tactile_mode": "none",
+    "tactile_type": "full",
+    "tactile_insert_location": "encoder",
+    "timing": "synchronized wall time; alternating AB/BA; capture excluded",
+    "capture_and_first_replay_ms": 1628.8887287955731,
+    "comparisons": [
+      {
+        "observation": 0,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 0,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 0,
+        "seed": 42,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 1,
+        "seed": 42,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 0,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 1,
+        "max_abs": 0.0
+      },
+      {
+        "observation": 2,
+        "seed": 42,
+        "max_abs": 0.0
+      }
+    ],
+    "owned_output": true,
+    "same_rng_progression": true,
+    "fresh_noise": true,
+    "latency": {
+      "predict_action_chunk": {
+        "eager": {
+          "median_ms": 242.82876309007406,
+          "p95_ms": 257.4127708445303
+        },
+        "graph": {
+          "median_ms": 83.24184094090015,
+          "p95_ms": 83.41696538263932
+        },
+        "speedup": 2.917147919187384
+      },
+      "deployment_predict_chunk": {
+        "eager": {
+          "median_ms": 247.4873085739091,
+          "p95_ms": 272.1230047172867
+        },
+        "graph": {
+          "median_ms": 86.1188560957089,
+          "p95_ms": 88.16546794259921
+        },
+        "speedup": 2.873787690571064
+      }
+    },
+    "graphs": {
+      "_chunk_cuda_graph": {
+        "captures": 2,
+        "replays": 66,
+        "eager_calls": 0
+      },
+      "_action_cuda_graph": {
+        "captures": 0,
+        "replays": 0,
+        "eager_calls": 0
+      },
+      "_layerwise_prefix_cuda_graph": {
+        "captures": 2,
+        "replays": 66,
+        "eager_calls": 0
+      },
+      "_layerwise_text_cuda_graph": {
+        "captures": 0,
+        "replays": 0,
+        "eager_calls": 0
+      }
+    },
+    "weight_note": "pretrained Qwen3.5-2B; randomly initialized action head and VAE, inference correctness/performance only"
+  }
+]

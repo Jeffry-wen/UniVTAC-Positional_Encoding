@@ -20,7 +20,7 @@ bash test_policy.sh --checkpoint /path/to/run --inspect
 bash test_policy.sh --checkpoint /path/to/run --task lift_can --offline
 ```
 
-当前统一训练使用绝对 8D 关节 state/action，动作从 `t+1` 开始；默认 chunk 为 32。触觉支持 `none`、`as_image`、`encode`。`encode` 使用本仓库训练的六种 encoder，支持 `cls/full` 和 `encoder/decoder` 插入位置。
+当前统一训练使用绝对 8D 关节 state/action，动作从 `t+1` 开始；默认 chunk 为 50，执行 30 步。触觉支持 `none`、`as_image`、`encode`。`encode` 使用本仓库训练的六种 encoder，支持 `cls/full` 和 `encoder/decoder` 插入位置。
 
 多卡训练使用 `NUM_PROCESSES`，`BATCH_SIZE` 是全局 batch；四个八卡机器的批量启动脚本仍位于 `scripts/`。完整参数和 checkpoint 约定见 [TRAINING.md](../TRAINING.md)。
 
@@ -39,7 +39,7 @@ bash test_policy.sh --checkpoint /path/to/run --task lift_can --offline
 
 ## CUDA Graph 推理
 
-StarVLA 默认启用 CUDA Graph，并使用单次采样（`repeated_diffusion_steps=1`，取消 ensemble），保留 4 步去噪和原计算精度。统一部署加载旧 checkpoint 时也使用这些推理默认值，无需重新训练或转换 checkpoint。Graph 捕获 GR00T 完整去噪，以及受支持的 Qwen3.5 patchify → vision → text decoder；如显式启用 ensemble，也捕获 repeat 和 ensemble mean。实现已对照本地 `lerobot-v0.5.1-test-cuda_graph` 的 FastVLM / FullChunkGraph 适配。
+StarVLA 默认启用 CUDA Graph，并使用单次采样（`repeated_diffusion_steps=1`，取消 ensemble），新模型默认 10 步去噪。旧 checkpoint 按保存的配置恢复去噪步数；历史 GROOT 配置未记录该字段时回退到 4 步，无需转换权重。Graph 捕获 GR00T 完整去噪，以及受支持的 Qwen3.5 patchify → vision → text decoder；如显式启用 ensemble，也捕获 repeat 和 ensemble mean。实现已对照本地 `lerobot-v0.5.1-test-cuda_graph` 的 FastVLM / FullChunkGraph 适配。
 
 ```bash
 bash test_policy.sh --checkpoint /path/to/run --task lift_can --cuda-graph --headless

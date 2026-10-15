@@ -28,7 +28,7 @@ POLICY=starvla_groot TRAINING_MODE=multi_task \
 
 `TACTILE_MODE` is `none`, `as_image`, or `encode`. `TACTILE_INPUT_MODE` is `marker_only`, `rgb_only`, `marker_rgb`, or `depth_deform_20`, `depth_deform_80`, `depth_deform_160`, `depth_deform_240`, `depth_deform_nonlinear`, `depth_deform_nonlinear_radial`; `INPUT_MODE` is accepted as a compatibility alias. `encode` additionally uses `TACTILE_TYPE=cls|full` and `ENCODER_CKPT`, or the latest matching `encoder_results/<input>/<method>/<size>/*/encoder.pth`. `as_image` sends the selected tactile representation through a visual path. All depth/deform modes use `clip((30-camera_depth_mm)/5,0,1)` from raw camera depth. Linear modes use ±20/80/160/240 px; their previous 28 mm / 3 mm checkpoints need retraining. `depth_deform_nonlinear` uses linear displacement mapping within ±20 px with rational tails, and TPS interpolation; `depth_deform_nonlinear_radial` applies the original nonlinear amplitude curve to vector length r=sqrt(dx^2+dy^2), scaling dx and dy together to preserve direction; the linear core is r<=20 px and rational tails have no hard cutoff; both use full-marker TPS. See `encoder/README.md` for formulas. Testing retains out-of-view marker coordinates, stable IDs and visibility in `marker_traces/<seed>_<result>.hdf5`. `marker_only` is already three-channel RGB (`R = G = B`, white marker dots on black), shared by the `as_image` and `encode` paths. Older one-channel marker encoder checkpoints require retraining or explicit weight conversion. Set `CAMERAS=head|all|auto`; `auto` uses both cameras only when every selected task is configured for both.
 
-The per-policy `base_config.yml` files hold model and optimizer defaults. Routing, task selection, data representation, training budget, and output destination are set in `train_policy.sh` using environment variables. PI0.5 and GR00T retain the StarVTLA optimizer defaults, including AdamW at `2.5e-5` and a warmup followed by cosine decay. The root launcher defaults to chunk 32; set `CHUNK_SIZE` explicitly to override it. All three policies use an **absolute 8D joint state**, with the first action target at `t+1`. Action targets support the two modes below.
+The per-policy `base_config.yml` files hold model and optimizer defaults. Routing, task selection, data representation, training budget, and output destination are set in `train_policy.sh` using environment variables. PI0.5 and GR00T retain the StarVTLA optimizer defaults, including AdamW at `2.5e-5` and a warmup followed by cosine decay. The root launcher and `training/*.sh` default to `CHUNK_SIZE=50` and `N_ACTION_STEPS=30`. The root launcher accepts environment overrides; `training/*.sh` fixes these two values with explicit exports. Require `1 <= N_ACTION_STEPS <= CHUNK_SIZE`. The execution horizon is saved with the run and becomes the deployment default; `--execution-horizon` can override it at inference. ACT with temporal aggregation enabled still replans every step. All three policies use an **absolute 8D joint state**, with the first action target at `t+1`. Action targets support the two modes below.
 
 ### Absolute and relative joint actions
 
@@ -65,6 +65,8 @@ POLICY=n0vtla TRAINING_MODE=single_task TASK=lift_can \
 N0 defaults to `TACTILE_MODE=native`, `TACTILE_INPUT_MODE=rgb_only`, chunk 50 and 20,000 steps. All nine tactile input representations (`rgb_only`, `marker_rgb`, `marker_only`, `depth_deform_20`, `depth_deform_80`, `depth_deform_160`, `depth_deform_240`, `depth_deform_nonlinear`, `depth_deform_nonlinear_radial`) are supported. Current and episode-first frames are converted to the selected representation before subtraction, then use the original frozen-DINOv2/predictor/latent-token pathway. `TACTILE_MODE=none` provides a missing-touch control with the same model structure. N0 uses quantile normalization and masks padded action time steps and the 24 unused action dimensions in its loss.
 
 The base checkpoint is loaded strictly from `resources/pretrained_models/n0-vtla-base/` (`N0_PRETRAINED_PATH` override); the learned gate and tactile parameters are retained. The existing local PaliGemma tokenizer is bundled into the saved run (`N0_TOKENIZER_PATH` override). The saved model contains DINOv2 weights, so inference requires neither the initialization checkpoint nor a backbone download. Runtime imports are entirely inside UniVTAC; the adjacent N0-VTLA repository is not required. No Transformers installation files are overwritten. See [N0-VTLA details](n0vtla/README.md).
+
+StarVLA-GR00T and StarVLA-PI now default to `action_expert_hidden_size: 1024` in their base configs. This is the transformer width, separate from GR00T's `action_head_hidden_size` MLP width. Qwen3.5-2B remains 24 text layers at width 2048; PI uses 24 action blocks with cross-attention projections connecting the two widths. Both action heads use FP32 autocast for training and inference, with TF32 disabled. Old run/config files lacking the expert-width field restore the historical architecture (GR00T's DiT-B/L preset, or PI's VLM width), including old PI selected-layer layouts, and load weights strictly. New runs save the width explicitly. Raw state dictionaries still require a matching architecture config; weights are never resized to the new defaults.
 
 Each run saves `train.log`, `exit_code`, `train_config.yml`, `dataset_stats.json`, `episodes.json`, and step checkpoints under `policy_results/` unless `OUTPUT_DIR` is set. No simulator is started by this training entry point.
 
@@ -154,3 +156,28 @@ Each machine needs the repository, demonstration data, trained encoder checkpoin
 ## Local code provenance
 
 `policy/vla_common/engine` and the PI0.5 and StarVLA-GR00T model implementations were adapted from the adjacent StarVTLA checkout, including its attributed LeRobot and OpenPI-derived source. The training data adapter and tactile checkpoint adapter are UniVTAC-specific. Runtime imports and weights resolve entirely within this repository.
+
+## StarVLA-PI
+
+`POLICY=starvla_pi` 使用 `policy/starvla_pi/base_config.yml`，与 StarVLA-GR00T 共用
+`resources/pretrained_models/Qwen3.5-2B/` 预训练 VLM；动作头随机初始化。
+支持相同的 `none/as_image/encode` 触觉路由和 `encoder/decoder` 插入位置。
+State/action 使用 q01/q99 分位数归一化；真实 8D 动作归一化后补齐到 32D，
+补齐维度及 episode 尾部无效时间步不参与 loss，部署输出裁回 8D 后反归一化。
+默认使用全部 24 层 Qwen hidden states、24 个对应 DiT block 和 10 步 Euler 去噪。
+推理默认开启 CUDA Graph，捕获完整逐层 VLM 和动作去噪，使用单次噪声采样。
+
+```bash
+POLICY=starvla_pi TRAINING_MODE=single_task TASK=lift_can EPISODES=2 \
+  TACTILE_MODE=none CAMERAS=all STEPS=1 BATCH_SIZE=1 WORKERS=0 \
+  MAX_VAL_BATCHES=1 bash train_policy.sh
+
+POLICY=starvla_pi TRAINING_MODE=multi_task CAMERAS=all \
+  TACTILE_MODE=encode TACTILE_INPUT_MODE=marker_rgb \
+  ENCODER_METHOD=VAE ENCODER_SIZE=S TACTILE_TYPE=full \
+  TACTILE_INSERT_LOCATION=encoder bash train_policy.sh
+```
+
+该动作头宽度与 Qwen hidden size 一致，显存需求与 GR00T 不同；先用小 batch 测量。
+训练 checkpoint 和 `test_policy.sh` 部署入口沿用统一格式，详见
+[StarVLA-PI README](starvla_pi/README.md)。

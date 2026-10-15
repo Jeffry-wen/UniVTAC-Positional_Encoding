@@ -1,0 +1,22 @@
+chunk_size: 50
+n_action_steps: 30
+max_action_dim: 32
+action_expert_hidden_size: 1024
+layerwise_num_layers: null
+layerwise_attention_head_dim: 64
+layerwise_dropout: 0.0
+num_inference_timesteps: 10
+repeated_diffusion_steps: 1
+num_target_vision_tokens: 32
+dtype: bfloat16
+attn_implementation: sdpa
+optimizer_lr: 0.000025
+optimizer_betas: [0.9, 0.95]
+optimizer_eps: 0.00000001
+optimizer_weight_decay: 0.01
+optimizer_grad_clip_norm: 1.0
+scheduler_warmup_steps: 1000
+scheduler_decay_steps: 30000
+scheduler_decay_lr: 0.0000025
+gradient_checkpointing: false
+use_cuda_graph: true

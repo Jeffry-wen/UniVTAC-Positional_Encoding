@@ -8,6 +8,7 @@ NUM_PROCESSES="${NUM_PROCESSES:-1}"        # GPUs per experiment; 1 = ordinary P
 if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then
   echo "Usage: [environment variables] bash train_policy.sh"
   echo "NUM_PROCESSES=4 enables four-GPU DDP; BATCH_SIZE is the global batch size."
+  echo "CHUNK_SIZE=50 predicts 50 actions; N_ACTION_STEPS=30 executes 30 before replanning."
   echo "See policy/TRAINING.md for configuration examples."
   exit 0
 fi
@@ -17,7 +18,7 @@ if [[ ! "$NUM_PROCESSES" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-POLICY="${POLICY:-starvla_groot}"                    # act | pi05 | starvla_groot | n0vtla
+POLICY="${POLICY:-starvla_groot}"                    # act | pi05 | starvla_groot | starvla_pi | n0vtla
 if [[ "$POLICY" == n0vtla ]]; then
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
   ACTION_MODE="${ACTION_MODE:-relative_joint}"
@@ -48,7 +49,8 @@ ENCODER_CKPT="${ENCODER_CKPT:-}"
 
 STEPS="${STEPS:-5_0000}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
-CHUNK_SIZE="${CHUNK_SIZE:-32}"
+CHUNK_SIZE="${CHUNK_SIZE:-50}"
+N_ACTION_STEPS="${N_ACTION_STEPS:-30}" # Actions executed before replanning
 WORKERS="${WORKERS:-4}"
 SAVE_FREQ="${SAVE_FREQ:-10_000}"
 SAVE_CHECKPOINT="${SAVE_CHECKPOINT:-true}"
@@ -67,13 +69,18 @@ case "$POLICY" in
       if [[ "$TACTILE_TYPE" == full ]]; then BATCH_SIZE=16; else BATCH_SIZE=64; fi
     fi
     ;;
-  pi05|starvla_groot|n0vtla)
+  pi05|starvla_groot|starvla_pi|n0vtla)
     STEPS="${STEPS:-20000}"
-    CHUNK_SIZE="${CHUNK_SIZE:-32}"
+    CHUNK_SIZE="${CHUNK_SIZE:-50}"
     BATCH_SIZE="${BATCH_SIZE:-8}"
     ;;
   *) echo "Unknown POLICY: $POLICY" >&2; exit 2 ;;
 esac
+
+if [[ ! "$CHUNK_SIZE" =~ ^[1-9][0-9]*$ || ! "$N_ACTION_STEPS" =~ ^[1-9][0-9]*$ ]] || ((N_ACTION_STEPS > CHUNK_SIZE)); then
+  echo "Require positive integers with 1 <= N_ACTION_STEPS <= CHUNK_SIZE; got $N_ACTION_STEPS and $CHUNK_SIZE" >&2
+  exit 2
+fi
 
 if [[ "$TACTILE_MODE" == encode && -z "$ENCODER_CKPT" ]]; then
   ENCODER_CKPT="$(find "$ROOT/encoder_results/$TACTILE_INPUT_MODE/$ENCODER_METHOD/$ENCODER_SIZE" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"
@@ -100,7 +107,7 @@ args=(
   --action-mode "$ACTION_MODE"
   --tactile-mode "$TACTILE_MODE" --tactile-input-mode "$TACTILE_INPUT_MODE"
   --tactile-type "$TACTILE_TYPE" --tactile-insert-location "$TACTILE_INSERT_LOCATION"
-  --steps "$STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CHUNK_SIZE"
+  --steps "$STEPS" --batch-size "$BATCH_SIZE" --chunk-size "$CHUNK_SIZE" --n-action-steps "$N_ACTION_STEPS"
   --workers "$WORKERS" --save-freq "$SAVE_FREQ" --log-freq "$LOG_FREQ"
   --max-val-batches "$MAX_VAL_BATCHES"
   --seed "$SEED" --device "$DEVICE" --image-size "$IMAGE_SIZE"
