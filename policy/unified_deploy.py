@@ -122,39 +122,96 @@ class Policy(BasePolicy):
             self.model = ACTPolicy(config).to(self.device)
             self.chunk_size = config["chunk_size"]
             self.temporal_agg = bool(config.get("temporal_agg", False))
-            default_horizon = config.get("n_action_steps", 1)
+            # ACT defaults to one action step, regardless of checkpoint n_action_steps.
+            default_horizon = 1
+            if "n_action_steps" in args:
+                horizon = args["n_action_steps"]
+                if type(horizon) is not int or not 1 <= horizon <= self.chunk_size:
+                    raise ValueError("ACT n_action_steps must be an integer between 1 and chunk_size")
+                self.temporal_agg = False
+                default_horizon = horizon
+                print(f"ACT inference: n_action_steps={horizon}, temporal_agg=False, "
+                      "use_cuda_graph=False", flush=True)
         elif self.kind == "n0vtla":
             from transformers import AutoTokenizer
             from .n0vtla.configuration_n0vtla import N0PolicyConfig
             from .n0vtla.modeling_n0vtla import N0Policy
             config = N0PolicyConfig(**self.run["config"]["n0_config"])
             config.use_cuda_graph = args.get("use_cuda_graph", True)
+            if "num_inference_steps" in args:
+                value = args["num_inference_steps"]
+                if type(value) is not int or value < 1:
+                    raise ValueError("num_inference_steps must be a positive integer")
+                config.num_inference_steps = value
+            if "n_action_steps" in args:
+                value = args["n_action_steps"]
+                if type(value) is not int or not 1 <= value <= config.chunk_size:
+                    raise ValueError("n_action_steps must be an integer between 1 and chunk_size")
+                config.n_action_steps = value
             self.tokenizer = AutoTokenizer.from_pretrained(asset_path(self.run, "tokenizer_path"), local_files_only=True)
             self.model = N0Policy(config).to(self.device)
+            print(f"N0VTLA inference: n_action_steps={config.n_action_steps}, "
+                  f"use_cuda_graph={config.use_cuda_graph}", flush=True)
             self.chunk_size, self.temporal_agg = config.chunk_size, False
             default_horizon = config.n_action_steps
         else:
             config = make_vla_config(self.run, self.device, models_root)
             if self.kind == "starvla_pi":
                 from policy.starvla_pi.modeling_starvla_pi import StarvlaPiPolicy
+                for name in ("n_action_steps", "num_inference_timesteps"):
+                    if name in args:
+                        value = args[name]
+                        if type(value) is not int or value < 1 or (name == "n_action_steps" and value > config.chunk_size):
+                            raise ValueError(f"Invalid {name}")
+                        setattr(config, name, value)
                 config.use_cuda_graph = args.get("use_cuda_graph", config.use_cuda_graph)
                 self.model = StarvlaPiPolicy(config).to(self.device)
+                print(f"StarVLA-pi inference: n_action_steps={config.n_action_steps}, "
+                      f"num_inference_timesteps={config.num_inference_timesteps}, "
+                      f"chunk_size={config.chunk_size}, expert_width={self.model.action_head.config.hidden_size}, "
+                      f"use_cuda_graph={config.use_cuda_graph}", flush=True)
             elif self.kind == "starvla_groot":
                 from policy.starvla_groot.modeling_starvla_groot import StarvlaGrootPolicy
                 config.use_cuda_graph = args.get("use_cuda_graph", config.use_cuda_graph)
+                for name in ("n_action_steps", "num_inference_timesteps"):
+                    if name in args:
+                        value = args[name]
+                        if type(value) is not int or value < 1:
+                            raise ValueError(f"{name} must be a positive integer")
+                        if name == "n_action_steps" and value > config.chunk_size:
+                            raise ValueError("n_action_steps must not exceed chunk_size")
+                        setattr(config, name, value)
                 config.repeated_diffusion_steps = args.get("repeated_diffusion_steps", config.repeated_diffusion_steps)
                 if not isinstance(config.repeated_diffusion_steps, int) or config.repeated_diffusion_steps < 1:
                     raise ValueError("repeated_diffusion_steps must be a positive integer")
                 self.model = StarvlaGrootPolicy(config).to(self.device)
+                print(f"StarVLA inference: n_action_steps={config.n_action_steps}, "
+                      f"num_inference_timesteps={config.num_inference_timesteps}, "
+                      f"use_cuda_graph={config.use_cuda_graph}", flush=True)
             else:
                 from transformers import AutoTokenizer
                 from policy.pi05.modeling_pi05 import PI05Policy
                 self.tokenizer = AutoTokenizer.from_pretrained(config.paligemma_tokenizer_path, local_files_only=True)
                 config.use_cuda_graph = args.get("use_cuda_graph", True)
+                if "num_inference_steps" in args:
+                    value = args["num_inference_steps"]
+                    if type(value) is not int or value < 1:
+                        raise ValueError("num_inference_steps must be a positive integer")
+                    config.num_inference_steps = value
+                if "n_action_steps" in args:
+                    value = args["n_action_steps"]
+                    if type(value) is not int or not 1 <= value <= config.chunk_size:
+                        raise ValueError("n_action_steps must be an integer between 1 and chunk_size")
+                    config.n_action_steps = value
                 self.model = PI05Policy(config).to(self.device)
+                print(f"PI05 inference: n_action_steps={config.n_action_steps}, "
+                      f"use_cuda_graph={config.use_cuda_graph}", flush=True)
             self.chunk_size = config.chunk_size
             self.temporal_agg = False
             default_horizon = config.n_action_steps
+
+        if "chunk_size" in args and args["chunk_size"] != self.chunk_size:
+            raise ValueError("Requested chunk_size does not match checkpoint architecture")
 
         # mmap keeps the optimizer tensors in the training bundle out of RAM.
         payload = torch.load(self.run["checkpoint"], map_location="cpu", weights_only=True, mmap=True)
