@@ -33,7 +33,7 @@ export NUM_PROCESSES=4
 
 # Model, data selection and action representation.
 export POLICY=starvla_groot
-export ACTION_MODE=absolute_joint
+export ACTION_MODE=relative_joint
 export TRAINING_MODE=multi_task
 export IMAGE_SIZE=224
 

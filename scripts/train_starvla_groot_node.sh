@@ -20,7 +20,7 @@ elif (($#)); then
   echo "Unknown arguments: $*" >&2
   exit 2
 fi
-case "$INPUT/$TYPE" in marker_rgb/cls|marker_rgb/full|depth_deform_80/cls|depth_deform_80/full|depth_deform_160/cls|depth_deform_160/full|depth_deform_240/cls|depth_deform_240/full) ;; *) exit 2 ;; esac
+case "$INPUT/$TYPE" in marker_rgb/cls|marker_rgb/full|depth_deform_20/cls|depth_deform_20/full|depth_deform_80/cls|depth_deform_80/full|depth_deform_160/cls|depth_deform_160/full|depth_deform_240/cls|depth_deform_240/full|depth_deform_nonlinear/cls|depth_deform_nonlinear/full|depth_deform_nonlinear_radial/cls|depth_deform_nonlinear_radial/full) ;; *) exit 2 ;; esac
 if ! PYTHON_BIN="$(command -v "${PYTHON_BIN:-python}")"; then
   echo "Python not found; set PYTHON_BIN for this machine." >&2
   exit 2

@@ -1,4 +1,5 @@
-"""Train VAE-S at three deform ranges for 30 epochs, selecting best val loss."""
+"""Train selected supported depth/deform VAE-S modes on available GPUs."""
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
@@ -9,19 +10,21 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+MODES = tuple(f'depth_deform_{n}' for n in (20, 80, 160, 240)) + (
+    'depth_deform_nonlinear', 'depth_deform_nonlinear_radial')
 
 
-def train(limit, gpu, run_id):
-    mode = f'depth_deform_{limit}'
+def train(mode, gpu, run_id, epochs, patience):
     output = ROOT / 'encoder_results' / mode / 'VAE' / 'S' / run_id
     output.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), PYTHON_BIN=sys.executable)
     command = ['bash', str(ROOT / 'train_encoder.sh'), '--method', 'VAE',
-               '--size', 'S', '--input', mode, '--', '--epochs', '30',
-               '--early-stop-patience', '0', '--checkpoint-metric', 'val_loss',
+               '--size', 'S', '--input', mode, '--', '--epochs', str(epochs),
+               '--early-stop-patience', str(patience), '--checkpoint-metric', 'val_loss',
                '--device', 'cuda', '--output-dir', str(output)]
     status = dict(method='VAE', size='S', input_mode=mode, gpu=gpu,
-                  state='running', output=str(output), command=command)
+                  state='running', output=str(output), command=command,
+                  epochs=epochs, early_stop_patience=patience)
     started = time.time()
     with (output / 'driver.log').open('w') as log:
         process = subprocess.Popen(command, cwd=ROOT, env=env,
@@ -46,9 +49,21 @@ def train(limit, gpu, run_id):
 
 
 if __name__ == '__main__':
-    run_id = datetime.now().strftime('%Y%m%d-%H%M%S-%f')
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        jobs = [pool.submit(train, limit, gpu, run_id)
-                for limit, gpu in ((80, 0), (160, 1), (240, 0))]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--epochs', type=int, default=5)
+    parser.add_argument('--early-stop-patience', type=int, default=3)
+    parser.add_argument('--gpus', default='1,0', help='Round-robin physical GPU IDs')
+    parser.add_argument('--inputs', nargs='+', choices=MODES, default=list(MODES))
+    parser.add_argument('--run-id', default=datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
+    args = parser.parse_args()
+    gpus = [int(gpu) for gpu in args.gpus.split(',')]
+    if args.epochs < 1 or args.early_stop_patience < 0 or not gpus:
+        parser.error('Epochs/GPU list must be positive/nonempty; early-stop patience must be >=0')
+    if len(set(args.inputs)) != len(args.inputs):
+        parser.error('Input modes must be distinct')
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = [pool.submit(train, mode, gpus[index % len(gpus)], args.run_id,
+                            args.epochs, args.early_stop_patience)
+                for index, mode in enumerate(args.inputs)]
         failed = any([job.result() != 0 for job in jobs])
     raise SystemExit(int(failed))

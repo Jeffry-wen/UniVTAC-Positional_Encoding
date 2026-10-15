@@ -91,6 +91,9 @@ class Policy(BasePolicy):
         self.camera_keys = self.run["camera_keys"]
         self.tactile_mode = self.options.get("tactile_mode", "none")
         self.tactile_input_mode = self.options.get("tactile_input_mode", "marker_rgb")
+        if self.tactile_mode != "none":
+            from encoder.linear_depth_deform import require_depth_deform_encoding
+            require_depth_deform_encoding(self.run["config"], self.tactile_input_mode)
         self.record_policy_video = args.get("record_policy_video", False)
         self.save_policy_inputs = args.get("save_policy_inputs", False)
         self.tokenizer = None

@@ -48,14 +48,14 @@ def hdf5_observation(path, frame, run):
                         data["baseline"] = {key: rgb(f"{prefix}/{key}", 0)}
                 else:
                     data = {"marker": h5[f"{prefix}/marker"][frame]}
-                    if mode in ("depth_deform_80", "depth_deform_160", "depth_deform_240"):
+                    if mode in ("depth_deform_20", "depth_deform_80", "depth_deform_160", "depth_deform_240", "depth_deform_nonlinear", "depth_deform_nonlinear_radial"):
                         data["depth"] = h5[f"{prefix}/depth"][frame]
                         for field in ("press_depth", "marker_full", "marker_id", "marker_in_view"):
                             if f"{prefix}/{field}" in h5:
                                 data[field] = h5[f"{prefix}/{field}"][frame]
                     if run["options"].get("tactile_mode") == "native":
                         data["baseline"] = {"marker": h5[f"{prefix}/marker"][0]}
-                        if mode in ("depth_deform_80", "depth_deform_160", "depth_deform_240"):
+                        if mode in ("depth_deform_20", "depth_deform_80", "depth_deform_160", "depth_deform_240", "depth_deform_nonlinear", "depth_deform_nonlinear_radial"):
                             data["baseline"]["depth"] = h5[f"{prefix}/depth"][0]
                             for field in ("press_depth", "marker_full"):
                                 if f"{prefix}/{field}" in h5:

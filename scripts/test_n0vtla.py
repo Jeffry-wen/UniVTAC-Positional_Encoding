@@ -194,7 +194,7 @@ class N0Tests(unittest.TestCase):
                     f[f"tactile/{side}_tactile/marker"] = markers
                     f[f"tactile/{side}_tactile/depth"] = np.stack([np.full((24, 32), 34-step, np.float32) for step in range(3)])
             stats = {name: {"q01": [-1.]*8, "q99": [1.]*8} for name in ("state", "action")}
-            for mode in ("rgb_only", "marker_rgb", "marker_only", "depth_deform_80", "depth_deform_160", "depth_deform_240"):
+            for mode in ("rgb_only", "marker_rgb", "marker_only", "depth_deform_20", "depth_deform_80", "depth_deform_160", "depth_deform_240", "depth_deform_nonlinear", "depth_deform_nonlinear_radial"):
                 with self.subTest(mode=mode):
                     dataset = UniVTACDataset({"test": [path]}, cameras=["head"], tactile_mode="native", tactile_input_mode=mode,
                                             chunk_size=2, stats=stats, policy="n0vtla", image_size=224, action_mode="relative")

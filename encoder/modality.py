@@ -1,13 +1,17 @@
-"""Convert contact HDF5 observations to the four tactile encoder input modes."""
+"""Convert contact HDF5 observations to the tactile encoder input modes."""
 import cv2
 import numpy as np
 import torch
 if __package__:
     from .image_io import read_rgb
     from .linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
+    from .nonlinear_depth_deform import convert_nonlinear
+    from .radial_nonlinear_depth_deform import convert_nonlinear_radial
 else:
     from image_io import read_rgb
     from linear_depth_deform import convert_linear, DEPTH_DEFORM_SPECS, depth_deform_spec
+    from nonlinear_depth_deform import convert_nonlinear
+    from radial_nonlinear_depth_deform import convert_nonlinear_radial
 
 
 INPUT_CHANNELS = {'marker_only': 3, 'rgb_only': 3, 'marker_rgb': 3,
@@ -33,10 +37,15 @@ def tactile_from_arrays(data, mode, image_size=224):
                 cv2.circle(canvas, (cx, cy), 2, 255, -1)
         # Replicate the marker raster into RGB; each channel contains the same dots.
         return torch.from_numpy(canvas.copy()).unsqueeze(0).repeat(3, 1, 1).float() / 255
+    if mode == 'depth_deform_nonlinear':
+        return torch.from_numpy(convert_nonlinear(
+            data['depth'], data.get('marker_full', data.get('marker')), image_size))
+    if mode == 'depth_deform_nonlinear_radial':
+        return torch.from_numpy(convert_nonlinear_radial(
+            data['depth'], data.get('marker_full', data.get('marker')), image_size))
     spec = depth_deform_spec(mode)
     channels = convert_linear(
         data['depth'], data.get('marker_full', data.get('marker')), image_size,
-        press_depth=data.get('press_depth'),
         reference_depth_mm=spec['reference_depth_mm'],
         depth_range_mm=spec['depth_range_mm'], deform_range_px=spec['deform_range_px'])
     return torch.from_numpy(channels)

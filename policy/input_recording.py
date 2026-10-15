@@ -79,7 +79,7 @@ class PolicyInputRecorder:
             self.h5 = h5py.File(self.path,'w')
             self.h5.attrs['checkpoint'] = str(self.run['checkpoint'])
             self.h5.attrs['tactile_input_mode'] = self.mode
-            if self.mode in ('depth_deform_80', 'depth_deform_160', 'depth_deform_240'):
+            if self.mode in ('depth_deform_20', 'depth_deform_80', 'depth_deform_160', 'depth_deform_240', 'depth_deform_nonlinear', 'depth_deform_nonlinear_radial'):
                 from encoder.linear_depth_deform import depth_deform_spec
                 self.h5.attrs['depth_deform_encoding'] = json.dumps(depth_deform_spec(self.mode))
             self.h5.attrs['image_keys'] = json.dumps(self.keys)
@@ -136,7 +136,7 @@ class PolicyInputRecorder:
             self.marker_h5 = h5py.File(self.marker_path, 'w')
             self.marker_h5.attrs['checkpoint'] = str(self.run['checkpoint'])
             self.marker_h5.attrs['tactile_input_mode'] = self.mode
-            if self.mode in ('depth_deform_80', 'depth_deform_160', 'depth_deform_240'):
+            if self.mode in ('depth_deform_20', 'depth_deform_80', 'depth_deform_160', 'depth_deform_240', 'depth_deform_nonlinear', 'depth_deform_nonlinear_radial'):
                 self.marker_h5.attrs['depth_deform_encoding'] = json.dumps(depth_deform_spec(self.mode))
             self.marker_h5.attrs['time_contract'] = 'Live pre-action markers at action_index; policy input last refreshed at source_action_index.'
             self.marker_h5.attrs['marker_layout'] = '[reference/current, stable marker ID order, x/y]; pixels; no clipping'

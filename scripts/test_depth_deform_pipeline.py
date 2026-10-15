@@ -1,4 +1,4 @@
-"""Check train mmap, HDF5 and deployment parity for the 3mm with 80/160/240px encoding."""
+"""Check train mmap, HDF5 and deployment parity for 30/5 depth with 20/80/160/240px."""
 from pathlib import Path
 import sys
 import tempfile
@@ -16,8 +16,8 @@ from scripts.test_policy_input_recording import make_policy, observation
 
 
 class DepthDeformPipelineTest(unittest.TestCase):
-    def test_all_readers_match_full_markers_and_saved_indentation(self):
-        for limit in (80, 160, 240):
+    def test_all_readers_match_full_markers_and_camera_depth(self):
+        for limit in (20, 80, 160, 240):
             with self.subTest(limit=limit):
                 self.check_readers(limit)
 
@@ -25,7 +25,7 @@ class DepthDeformPipelineTest(unittest.TestCase):
         mode = f'depth_deform_{limit}'
         obs = observation()
         raw = obs['tactile']['left_tactile']
-        # Distinguish saved indentation from camera-depth fallback, and full
+        # Distinguish ignored saved indentation from camera depth, and full
         # out-of-view coordinates from the deliberately conflicting old markers.
         raw['press_depth'] = np.full_like(raw['depth'], 2.5)
         raw['marker_full'] = raw['marker'].copy()
@@ -33,7 +33,7 @@ class DepthDeformPipelineTest(unittest.TestCase):
         raw['marker'][1] = raw['marker'][0]
         expected = tactile_from_arrays(raw, mode)
         np.testing.assert_allclose(expected[:, 100, 100].numpy()*255,
-                                   [212.5,128+127*50/limit,128+127*max(-100/limit,-1)], atol=2e-5)
+                                   [153,128+127*min(50/limit,1),128+127*max(-100/limit,-1)], atol=2e-5)
         policy,_ = make_policy(mode)
         torch.testing.assert_close(policy.encode_obs(obs)['observation.images.tac_left'][0], expected)
         for compression in (None, 'gzip'):
@@ -51,11 +51,22 @@ class DepthDeformPipelineTest(unittest.TestCase):
                 for handle in data.handles.values():
                     handle.close()
 
-    def test_legacy_training_file_uses_known_gel_baseline(self):
+    def test_legacy_training_file_uses_30mm_camera_baseline(self):
         raw = observation()['tactile']['left_tactile']
         output = tactile_from_arrays(raw,'depth_deform_80')
         np.testing.assert_allclose(output[:, 100, 100].numpy()*255,
-            [85,128+127*8/80,128-127*5/80],atol=2e-5)
+            [153,128+127*8/80,128-127*5/80],atol=2e-5)
+
+    def test_all_depth_channels_match_nonlinear_exactly(self):
+        raw = observation()['tactile']['left_tactile']
+        # Include values straddling the clipping thresholds in resized pixels.
+        raw['depth'] = np.random.default_rng(42).uniform(23, 33, raw['depth'].shape).astype(np.float32)
+        raw['press_depth'] = np.full_like(raw['depth'], 99)
+        expected = tactile_from_arrays(raw, 'depth_deform_nonlinear', 37)[0]
+        for limit in (20, 80, 160, 240):
+            with self.subTest(limit=limit):
+                torch.testing.assert_close(tactile_from_arrays(raw, f'depth_deform_{limit}', 37)[0],
+                                           expected, rtol=0, atol=0)
 
 
 if __name__ == '__main__':

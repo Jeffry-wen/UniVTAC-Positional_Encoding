@@ -436,6 +436,9 @@ def run(args):
                           'stale_epochs': stale_epochs}
             torch.save(checkpoint, out / 'last.pth')
             if improved:
+                if args.method == 'VAE':
+                    # Keep the matching encoder/decoder for best-epoch reconstruction.
+                    torch.save(checkpoint, out / 'best.pth')
                 torch.save({key: checkpoint[key] for key in ('format_version', 'method', 'size', 'architecture',
                             'image_size', 'input_mode', 'in_chans', 'color_order', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
                             'val_loss', 'best_val_loss', 'knn_accuracy',

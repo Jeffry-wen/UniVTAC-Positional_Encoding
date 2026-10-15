@@ -33,7 +33,7 @@ export NUM_PROCESSES=1
 
 # Model, data selection and action representation.
 export POLICY=act
-export ACTION_MODE=absolute_joint
+export ACTION_MODE=relative_joint
 export TRAINING_MODE=multi_task
 export IMAGE_SIZE=256
 

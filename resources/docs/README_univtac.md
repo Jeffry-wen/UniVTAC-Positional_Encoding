@@ -29,7 +29,7 @@ cd UniVTAC
 bash scripts/install.sh
 ```
 
-See the [Installation Guide](./resources/docs/Installation.md) for CUDA/compiler prerequisites and verification, and the [migration notes](./resources/docs/isaacsim_5_1_migration.md) for the new GelSight, Actor and render-pipeline behavior.
+See the [Installation Guide](./Installation.md) for CUDA/compiler prerequisites and verification, and the [migration notes](./isaacsim_5_1_migration.md) for the new GelSight, Actor and render-pipeline behavior.
 
 ## Task Gallery
 
@@ -47,11 +47,11 @@ UniVTAC currently includes the following manipulation tasks, all featuring tacti
 | **Put Bottle in Shelf** | `put_bottle_in_shelf` | Place a bottle onto a shelf |
 | **Grasp & Classify** | `grasp_classify` | Grasp an object and classify it by tactile feedback |
 
-To build more tasks, refer to the [Task Creation Guide](./resources/docs/TaskCreation.md) for instructions on how to define new manipulation tasks within the UniVTAC framework.
+To build more tasks, refer to the [Task Creation Guide](./TaskCreation.md) for instructions on how to define new manipulation tasks within the UniVTAC framework.
 
 ## Data Collection
 
-See the [Data Collection Guide](./resources/docs/Collection.md) for instructions on how to run the automated data collection pipeline, configure task-specific parameters, and understand the output data structure.
+See the [Data Collection Guide](./Collection.md) for instructions on how to run the automated data collection pipeline, configure task-specific parameters, and understand the output data structure.
 
 The dataset is available from [HuggingFace](https://huggingface.co/datasets/byml/UniVTAC)
 and [ModelScope](https://modelscope.cn/datasets/byml2024/UniVTAC). Its published
@@ -103,7 +103,7 @@ UniVTAC includes several baseline policies implemented under the `policy/` direc
 - PI0.5: PaliGemma prefix and Gemma action expert, under `policy/pi05/`
 - StarVLA-GR00T: Qwen vision-language backbone and GR00T action head, under `policy/starvla_groot/`
 
-PI0.5 and StarVLA-GR00T share infrastructure in `policy/vla_common/`. Unified training and checkpoint testing use the root `train_policy.sh` and `test_policy.sh`; see [policy training](policy/TRAINING.md).
+PI0.5 and StarVLA-GR00T share infrastructure in `policy/vla_common/`. Unified training and checkpoint testing use the root `train_policy.sh` and `test_policy.sh`; see [policy training](../../policy/TRAINING.md).
 
 Each policy is a self-contained module under `policy/` with its own data processing, training, and deployment scripts. All policies share a unified evaluation entry point at the project root:
 
@@ -119,7 +119,7 @@ bash scripts/parallel_eval.sh ${task_name} ${task_config} ${policy_config} ${gpu
 
 The evaluation results, including videos and success rate logs, will be saved in the `eval_result/` directory under the project root.
 
-To deploy your own policy, refer to the [Deploy Your Policy](./resources/docs/Deploy.md).
+To deploy your own policy, refer to the [Deploy Your Policy](./Deploy.md).
 
 ## TODO
 
@@ -138,7 +138,7 @@ If you find our work useful, please consider citing:
 ```
 
 ## 🏷️ License
-This repository is released under the MIT license. See [LICENSE](./LICENSE) for additional details.
+This repository is released under the MIT license. See [LICENSE](../../LICENSE) for additional details.
 
 ## Contact
 <div style="text-align: center;">

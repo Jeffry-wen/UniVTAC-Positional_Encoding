@@ -52,7 +52,7 @@ def observation():
 
 class RecordingTest(unittest.TestCase):
     def test_pixels_match_actual_adapter_for_every_mode(self):
-        for mode in ('none','rgb_only','marker_only','marker_rgb','depth_deform_80','depth_deform_160','depth_deform_240'):
+        for mode in ('none','rgb_only','marker_only','marker_rgb','depth_deform_20','depth_deform_80','depth_deform_160','depth_deform_240','depth_deform_nonlinear', 'depth_deform_nonlinear_radial'):
             with self.subTest(mode=mode):
                 policy,run = make_policy(mode)
                 batch = policy.encode_obs(observation())
@@ -65,7 +65,12 @@ class RecordingTest(unittest.TestCase):
                     np.testing.assert_array_equal(frame[32:,i*224:(i+1)*224],expected)
 
     def test_queued_actions_keep_original_input_and_raw_observation(self):
-        policy,run = make_policy('depth_deform_80')
+        for mode in ('depth_deform_80', 'depth_deform_nonlinear_radial'):
+            with self.subTest(mode=mode):
+                self.check_queued_actions(mode)
+
+    def check_queued_actions(self, mode):
+        policy,run = make_policy(mode)
         recorder = PolicyInputRecorder(run,save_raw=True)
         with tempfile.TemporaryDirectory() as directory:
             task = SimpleNamespace(policy_input_recorder=recorder,save_root=Path(directory),
@@ -78,6 +83,9 @@ class RecordingTest(unittest.TestCase):
             policy.eval(task,obs)  # replan: now sees the changed markers
             recorder.close('checked')
             with h5py.File(Path(directory)/'policy_inputs/7_checked.hdf5') as f:
+                import json
+                from encoder.linear_depth_deform import depth_deform_spec
+                self.assertEqual(json.loads(f.attrs['depth_deform_encoding']), depth_deform_spec(mode))
                 self.assertEqual(f['source_action_index'][:].tolist(),[0,0,2])
                 self.assertEqual(f['action_index'][:].tolist(),[0,1,2])
                 m = f['tactile/left_tactile/marker'][:]
@@ -88,7 +96,12 @@ class RecordingTest(unittest.TestCase):
                 self.assertFalse(np.array_equal(image[0],image[2]))
 
     def test_marker_trace_is_live_complete_and_keeps_ids_without_raw_recording(self):
-        policy,run = make_policy('depth_deform_80')
+        for mode in ('depth_deform_20', 'depth_deform_80', 'depth_deform_nonlinear', 'depth_deform_nonlinear_radial'):
+            with self.subTest(mode=mode):
+                self.check_marker_trace(mode)
+
+    def check_marker_trace(self, mode):
+        policy,run = make_policy(mode)
         policy.save_policy_inputs = False
         recorder = PolicyInputRecorder(run, record_markers=True)
         obs = observation()
@@ -114,7 +127,9 @@ class RecordingTest(unittest.TestCase):
                 np.testing.assert_array_equal(g['marker_full'][:,1,0], [[-35,400],[-45,410]])
                 np.testing.assert_array_equal(g['marker_id'][:], np.tile(np.arange(63), (2,1)))
                 self.assertFalse(g['marker_in_view'][:,0].any())
-                self.assertIn('80px', f.attrs['depth_deform_encoding'])
+                from encoder.linear_depth_deform import depth_deform_spec
+                import json
+                self.assertEqual(json.loads(f.attrs['depth_deform_encoding']), depth_deform_spec(mode))
 
 
 if __name__=='__main__':

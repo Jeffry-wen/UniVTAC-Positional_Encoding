@@ -29,6 +29,8 @@ class TactileEncoder(nn.Module):
             raise ValueError(f"Unsupported UniVTAC tactile checkpoint method: {method}")
         if state.get("input_mode") != config.tactile_input_mode:
             raise ValueError(f"Checkpoint input {state.get('input_mode')} != {config.tactile_input_mode}")
+        from encoder.linear_depth_deform import require_depth_deform_encoding
+        require_depth_deform_encoding(state, config.tactile_input_mode)
         encoder_dir = Path(__file__).resolve().parents[2] / "encoder"
         if str(encoder_dir) not in sys.path:
             sys.path.insert(0, str(encoder_dir))
