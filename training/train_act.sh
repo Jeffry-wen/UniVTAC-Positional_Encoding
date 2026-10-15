@@ -41,7 +41,7 @@ export IMAGE_SIZE=256
 export STEPS=50000
 export BATCH_SIZE=64
 export CHUNK_SIZE=50
-export N_ACTION_STEPS=30
+export N_ACTION_STEPS=1
 export SAVE_FREQ=10000
 
 # Vision-only training: no tactile encoder checkpoint is required.
