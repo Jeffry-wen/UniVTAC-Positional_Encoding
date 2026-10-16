@@ -33,7 +33,7 @@ export NUM_PROCESSES=4
 
 # Model, data selection and action representation.
 export POLICY=starvla_groot
-export ACTION_MODE="${ACTION_MODE:-absolute_joint}"
+export ACTION_MODE=relative_joint
 export TRAINING_MODE=multi_task
 export IMAGE_SIZE=224
 
@@ -44,11 +44,11 @@ export CHUNK_SIZE=50
 export N_ACTION_STEPS=30
 export SAVE_FREQ=10000
 
-# Vision-only training: no tactile encoder checkpoint is required.
-export TACTILE_MODE=none
-export TACTILE_INPUT_MODE=rgb_only
-export ENCODER_METHOD=VAE
-export ENCODER_SIZE=S
+# Tactile settings can be overridden through environment variables at launch.
+export TACTILE_MODE="${TACTILE_MODE:-none}"
+export TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-rgb_only}"
+export ENCODER_METHOD="${ENCODER_METHOD:-VAE}"
+export ENCODER_SIZE="${ENCODER_SIZE:-S}"
 
 echo "$POLICY: tactile=$TACTILE_MODE, action=$ACTION_MODE, training=$TRAINING_MODE, task=${TASK:-all}, tasks=${TASKS:-all}, episodes=${EPISODES:-0}, cameras=${CAMERAS:-all}, image_size=$IMAGE_SIZE, GPUs=$CUDA_VISIBLE_DEVICES, global_batch=$BATCH_SIZE, steps=$STEPS, save_freq=$SAVE_FREQ, chunk_size=$CHUNK_SIZE, n_action_steps=$N_ACTION_STEPS"
 exec bash "$ROOT/train_policy.sh" "$@"
