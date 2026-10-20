@@ -43,12 +43,47 @@ def pool_tactile_tokens(tokens, backbone, method, pretrained_mode, *, includes_c
     return pool_spatial_tokens(tokens, grid, prefix)
 
 
+def univtac_pool_tokens(backbone, method, images):
+    """Return the cls-mode feature followed by nine spatial tokens in one pass."""
+    if method == 'ResNet':
+        net = backbone.backbone
+        grid = net.maxpool(net.relu(net.bn1(net.conv1(images))))
+        grid = net.layer4(net.layer3(net.layer2(net.layer1(grid))))
+        cls = net.fc(net.avgpool(grid).flatten(1))[:, None]
+        patches = F.adaptive_avg_pool2d(grid, (3, 3)).flatten(2).transpose(1, 2)
+        # ResNet-B has 2048 spatial channels but a 512-D global feature.
+        # Reuse its pretrained FC to put all ten tokens in the same space.
+        patches = net.fc(patches)
+    elif method == 'VAE':
+        cls, patches = backbone.cls_and_latent_tokens(images)
+        patches = pool_spatial_tokens(patches, (7, 7))
+    else:
+        tokens = backbone.tokens(images)
+        cls = tokens[:, :1]
+        patches = pool_spatial_tokens(tokens[:, 1:], (backbone.grid_size, backbone.grid_size))
+    return torch.cat((cls, patches), dim=1)
+
+
 def pool_act_tactile_outputs(forward):
     """Pool ACT features and their positions without wrapping registered modules."""
     @wraps(forward)
     def pooled_forward(self, *args, **kwargs):
+        pooling = getattr(self, 'pooling3x3', False) and self.tactile_type == 'full'
+        if (pooling and self.pooling_pretrained_mode == 'univtac'
+                and hasattr(self.backbone, 'embed_dim')):
+            tokens = univtac_pool_tokens(self.backbone, self.pooling_method, args[0])
+            feature = tokens.transpose(1, 2).unsqueeze(2)
+            spatial = tokens[:, 1:].transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], 3, 3)
+            position = self.position_embedding(spatial).flatten(2).unsqueeze(2)
+            position = position.expand(tokens.shape[0], -1, -1, -1)
+            if hasattr(self, 'cls_position'):
+                cls_position = self.cls_position.weight[None].transpose(1, 2).unsqueeze(2)
+                cls_position = cls_position.expand(tokens.shape[0], -1, -1, -1)
+            else:
+                cls_position = position.new_zeros(tokens.shape[0], position.shape[1], 1, 1)
+            return [feature], [torch.cat((cls_position, position), dim=-1).to(feature.dtype)]
         features, positions = forward(self, *args, **kwargs)
-        if not getattr(self, 'pooling3x3', False) or self.tactile_type != 'full':
+        if not pooling:
             return features, positions
         pooled_features, pooled_positions = [], []
         for feature, position in zip(features, positions):

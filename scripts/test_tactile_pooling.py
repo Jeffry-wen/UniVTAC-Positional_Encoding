@@ -14,7 +14,7 @@ from torch.nn import functional as F
 from policy.checkpoints import training_options
 from policy.vla_common.tactile_encode import TactileEncoder
 from policy.vla_common.tactile_pooling import (
-    pool_spatial_tokens, pool_tactile_tokens, pool_act_tactile_outputs,
+    pool_spatial_tokens, pool_tactile_tokens, pool_act_tactile_outputs, univtac_pool_tokens,
 )
 
 
@@ -27,13 +27,20 @@ class FakeEncoder(nn.Module):
 
     def tokens(self, x):
         offsets = torch.arange(197, device=x.device)[None, :, None]
-        return x.mean((1, 2, 3))[:, None, None].expand(-1, 197, 4) + offsets
+        tokens = x.mean((1, 2, 3))[:, None, None].expand(-1, 197, 4) + offsets
+        return tokens * 2 if getattr(self, 'method', None) == 'V-JEPA' else tokens
 
     def patch_tokens(self, x):
         return self.tokens(x)[:, 1:]
 
     def latent_tokens(self, x):
         return self.patch_tokens(x)[:, :49]
+
+    def cls_and_latent_tokens(self, x):
+        return self.tokens(x)[:, :1], self.latent_tokens(x)
+
+    def project_cls(self, cls):
+        return cls * 2
 
     def forward(self, x):
         return self.tokens(x)[:, 0]
@@ -43,6 +50,7 @@ def adapter(method='MAE', mode='full'):
     model = TactileEncoder.__new__(TactileEncoder)
     nn.Module.__init__(model)
     model.backbone = FakeEncoder()
+    model.backbone.method = method
     model.proj = nn.Linear(4, 6)
     model.keys = ['left', 'right']
     model.pretrained_mode = 'univtac'
@@ -71,13 +79,15 @@ class PoolingTest(unittest.TestCase):
 
     def test_vla_full_cls_frames_and_sensors(self):
         x = torch.randn(2, 3, 3, 16, 16, requires_grad=True)
-        for method, per_image in [('MAE', 10), ('DINOv2', 10), ('VAE', 9),
-                                  ('I-JEPA', 9), ('V-JEPA', 9)]:
+        for method, per_image in [('MAE', 10), ('DINOv2', 10), ('VAE', 10),
+                                  ('I-JEPA', 10), ('V-JEPA', 10)]:
             with self.subTest(method=method):
                 model = adapter(method, mode='pool')
                 y = model({'left': x, 'right': x + 1})
                 self.assertEqual(y.shape, (2, 2 * 3 * per_image, 6))
                 y.sum().backward(retain_graph=True)
+                single = x[:, 0]
+                torch.testing.assert_close(model._tokens(single)[:, 0], model.backbone(single))
                 model.mode = 'cls'
                 pooled = model({'left': x, 'right': x})
                 model.mode = 'cls'
@@ -114,7 +124,7 @@ class PoolingTest(unittest.TestCase):
             pooling3x3 = True
             pooling_pretrained_mode = 'univtac'
             pooling_method = 'MAE'
-            backbone = FakeEncoder()
+            backbone = SimpleNamespace(grid_size=14)
 
             @pool_act_tactile_outputs
             def forward(self, feature, pos):
@@ -136,6 +146,82 @@ class PoolingTest(unittest.TestCase):
         model.tactile_type, model.pooling3x3 = 'full', False
         feature, _ = model(flat, positions)
         self.assertIs(feature[0], flat)
+
+    def test_vjepa_projects_full_tokens_once_before_pooling(self):
+        import importlib
+        sys.path.insert(0, str(ROOT / 'encoder'))
+        from vit_encoder import TactileViT
+        model = importlib.import_module('V-JEPA.model').VJEPAEncoder('S').eval()
+        x = torch.randn(2, 3, 224, 224)
+        keys = set(model.state_dict())
+        with torch.no_grad():
+            raw = TactileViT.tokens(model, x)
+            expected = model.projector(raw.reshape(-1, 384)).reshape(2, 197, 384)
+            torch.testing.assert_close(model.tokens(x), expected)
+            torch.testing.assert_close(model.patch_tokens(x), expected[:, 1:])
+            torch.testing.assert_close(model(x), expected[:, 0])
+            pooled = univtac_pool_tokens(model, 'V-JEPA', x)
+            torch.testing.assert_close(pooled[:, 0], expected[:, 0])
+            torch.testing.assert_close(pooled[:, 1:], pool_spatial_tokens(expected[:, 1:], (14, 14)))
+            self.assertFalse(torch.allclose(model.patch_tokens(x), raw[:, 1:]))
+        model.train()
+        # Sequence projection must support BatchNorm and gradients over B*N tokens.
+        tokens = torch.randn(2, 196, 384, requires_grad=True)
+        model.project_tokens(tokens).square().mean().backward()
+        self.assertTrue(torch.isfinite(tokens.grad).all())
+        self.assertIsNotNone(model.projector[0].weight.grad)
+        # The CLS-only path must retain the original pretraining behavior.
+        with torch.no_grad():
+            raw_cls = TactileViT.tokens(model, x)[:, 0]
+            expected_cls = model.project_cls(raw_cls)
+            bn = model.projector[1]
+            before = bn.num_batches_tracked.item()
+            torch.testing.assert_close(model.projected_latent(x), expected_cls)
+            self.assertEqual(bn.num_batches_tracked.item(), before + 1)
+            self.assertTrue(torch.isfinite(model(x[:1])).all())
+        model.load_state_dict(model.state_dict(), strict=True)
+        self.assertEqual(set(model.state_dict()), keys)
+
+    def test_real_univtac_cls_plus_nine_and_gradients(self):
+        import importlib
+        sys.path.insert(0, str(ROOT / 'encoder'))
+        from vit_encoder import TactileViT
+        from VAE.model import VAEEncoder
+        from ResNet.model import ResNetCNNEncoder
+        factories = [
+            ('MAE', lambda: TactileViT('S')),
+            ('DINOv2', lambda: TactileViT('S')),
+            ('I-JEPA', lambda: importlib.import_module('I-JEPA.model').IJEPAEncoder('S')),
+            ('V-JEPA', lambda: importlib.import_module('V-JEPA.model').VJEPAEncoder('S')),
+            ('VAE', lambda: VAEEncoder('S')),
+            ('ResNet', lambda: ResNetCNNEncoder('S')),
+            ('ResNet', lambda: ResNetCNNEncoder('B')),
+        ]
+        for method, factory in factories:
+            with self.subTest(method=method, factory=factory):
+                backbone = factory().eval()
+                original_keys = set(backbone.state_dict())
+                x = torch.randn(1, 3, 224, 224, requires_grad=True)
+                actual = univtac_pool_tokens(backbone, method, x)
+                self.assertEqual(actual.shape, (1, 10, backbone.embed_dim))
+                with torch.no_grad():
+                    torch.testing.assert_close(actual[:, 0], backbone(x))
+                    if method == 'VAE':
+                        patches = backbone.latent_tokens(x)
+                        expected = pool_spatial_tokens(patches, (7, 7))
+                    elif method == 'ResNet':
+                        net = backbone.backbone
+                        grid = net.maxpool(net.relu(net.bn1(net.conv1(x))))
+                        grid = net.layer4(net.layer3(net.layer2(net.layer1(grid))))
+                        expected = net.fc(F.adaptive_avg_pool2d(grid, (3, 3)).flatten(2).transpose(1, 2))
+                    else:
+                        expected = pool_spatial_tokens(backbone.patch_tokens(x), (14, 14))
+                    torch.testing.assert_close(actual[:, 1:], expected)
+                actual.square().mean().backward()
+                self.assertTrue(torch.isfinite(x.grad).all())
+                self.assertGreater(x.grad.abs().sum().item(), 0)
+                self.assertEqual(set(backbone.state_dict()), original_keys)
+                del actual, backbone, x
 
     def test_legacy_and_new_config_restore(self):
         self.assertEqual(training_options({})['tactile_type'], 'cls')
@@ -170,6 +256,10 @@ class PoolingTest(unittest.TestCase):
         sys.path.insert(0, str(ROOT / 'policy/ACT/detr'))
         sys.path.insert(0, str(ROOT / 'encoder'))
         from policy.ACT.detr.models.backbone import build_tactile_backbone
+        # Import real class definitions before mocking the constructor used by ACT.
+        import importlib
+        for module in ('VAE.model', 'I-JEPA.model', 'V-JEPA.model'):
+            importlib.import_module(module)
         state = dict(method='MAE', size='S', input_mode='rgb_only', color_order='RGB',
                      image_size=224, in_chans=3)
         args = SimpleNamespace(lr_tactile_backbone=0, tactile_masks=False,
@@ -190,6 +280,25 @@ class PoolingTest(unittest.TestCase):
             args.tactile_type = 'cls'
             cls = build_tactile_backbone(args)
             self.assertEqual(cls(x)[0][0].shape, (2, 4, 1, 1))
+    def test_act_resnet_b_pool_global_dimension(self):
+        sys.path.insert(0, str(ROOT / 'policy/ACT/detr'))
+        sys.path.insert(0, str(ROOT / 'encoder'))
+        from policy.ACT.detr.models.backbone import build_tactile_backbone
+        state = dict(method='ResNet', size='B', architecture='resnet', input_mode='rgb_only',
+                     color_order='RGB', image_size=224, in_chans=3)
+        args = SimpleNamespace(lr_tactile_backbone=0, tactile_masks=False,
+            tactile_type='pool', hidden_dim=512, position_embedding='sine',
+            tactile_encoder_method='ResNet', tactile_encoder_config=state,
+            tactile_ckpt=None, tactile_encoder_size='B', tactile_input_mode='rgb_only')
+        model = build_tactile_backbone(args).eval()
+        self.assertEqual(model.num_channels, 512)
+        x = torch.randn(1, 3, 224, 224)
+        with torch.no_grad():
+            features, positions = model(x)
+            self.assertEqual(features[0].shape, (1, 512, 1, 10))
+            self.assertEqual(positions[0].shape, (1, 512, 1, 10))
+            torch.testing.assert_close(features[0][:, :, 0, 0], model.backbone(x))
+
 
 
 if __name__ == '__main__':

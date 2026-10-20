@@ -13,7 +13,7 @@ SIGReg = import_module('I-JEPA.sigreg').SIGReg
 
 
 class VJEPAEncoder(TactileViT):
-    """Single-frame projected ViT CLS for pretraining and policy input."""
+    """Single-frame ViT with a shared projector for CLS and spatial tokens."""
     def __init__(self, size, in_chans=3, num_frames=1):
         if num_frames != 1:
             raise ValueError('UniVTAC V-JEPA requires single-frame input; retrain multi-frame checkpoints')
@@ -30,8 +30,19 @@ class VJEPAEncoder(TactileViT):
     def forward(self, images):
         return self.projected_latent(images)
 
+    def tokens(self, images, **kwargs):
+        return self.project_tokens(super().tokens(images, **kwargs))
+
+    def project_tokens(self, tokens):
+        # BatchNorm1d expects [samples, channels], not [B, tokens, channels].
+        shape = tokens.shape
+        return self.project_cls(tokens.reshape(-1, shape[-1])).reshape(shape)
+
     def projected_latent(self, images):
-        x = super().forward(images)
+        # Keep the original CLS-only pretraining path and BatchNorm statistics.
+        return self.project_cls(super().tokens(images)[:, 0])
+
+    def project_cls(self, x):
         for layer in self.projector:
             if isinstance(layer, nn.BatchNorm1d) and layer.training and x.shape[0] == 1:
                 # File-chunk batches can end with one sample; use the accumulated stats.

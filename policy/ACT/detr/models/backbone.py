@@ -284,7 +284,7 @@ class CNNTactileBackbone(nn.Module):
     """Load a ResNet-S/B reconstruction encoder into ACT."""
 
     def __init__(self, size, ckpt, state, position_embedding,
-                 tactile_type='cls', input_mode='marker_rgb'):
+                 tactile_type='cls', input_mode='marker_rgb', pooling3x3=False):
         super().__init__()
         if state.get('method') != 'ResNet' or state.get('size') != size:
             raise ValueError(f'Expected ResNet-{size} checkpoint, got {state.get("method")}-{state.get("size")}')
@@ -301,8 +301,11 @@ class CNNTactileBackbone(nn.Module):
         if 'encoder' in state:
             encoder.load_state_dict(state['encoder'], strict=True)
         self.tactile_type = tactile_type
-        self.num_channels = 512 if tactile_type == 'cls' or size == 'S' else 2048
-        if tactile_type == 'full':
+        self.num_channels = 512 if tactile_type == 'cls' or size == 'S' or pooling3x3 else 2048
+        if tactile_type == 'full' and pooling3x3:
+            self.backbone = encoder
+            self.position_embedding = position_embedding
+        elif tactile_type == 'full':
             self.backbone = IntermediateLayerGetter(encoder.backbone, {'layer4': '0'})
             self.position_embedding = position_embedding
         else:
@@ -342,7 +345,8 @@ def build_tactile_backbone(args):
     elif method == 'ResNet' and state.get('architecture') == 'resnet':
         backbone = CNNTactileBackbone(getattr(args, 'tactile_encoder_size', 'S'), args.tactile_ckpt,
                                       state, position_embedding, tactile_type,
-                                      getattr(args, 'tactile_input_mode', 'marker_rgb'))
+                                      getattr(args, 'tactile_input_mode', 'marker_rgb'),
+                                      pooling3x3=getattr(args, 'tactile_type', 'cls') == 'pool')
     else:
         backbone = ViTTactileBackbone(method, getattr(args, 'tactile_encoder_size', 'S'),
                                       args.tactile_ckpt, position_embedding, tactile_type,

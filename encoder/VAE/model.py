@@ -54,14 +54,19 @@ class VAEEncoder(nn.Module):
         self.mu = nn.Conv2d(self.embed_dim, self.embed_dim, 1)
         self.logvar = nn.Conv2d(self.embed_dim, self.embed_dim, 1)
 
-    def parameters_for_latent(self, images):
-        patches = self.vit.patch_tokens(images)
+    def parameters_for_latent(self, images, *, vit_tokens=None):
+        patches = self.vit.patch_tokens(images) if vit_tokens is None else vit_tokens[:, 1:]
         b, _, d = patches.shape
         grid = patches.transpose(1, 2).reshape(b, d, 14, 14)
         latent = self.downsample(grid)
         mu = self.mu(latent).flatten(2).transpose(1, 2)
         logvar = self.logvar(latent).flatten(2).transpose(1, 2).clamp(-10, 10)
         return mu, logvar
+
+    def cls_and_latent_tokens(self, images):
+        tokens = self.vit.tokens(images)
+        mu, _ = self.parameters_for_latent(images, vit_tokens=tokens)
+        return tokens[:, :1], mu
 
     def latent_tokens(self, images):
         return self.parameters_for_latent(images)[0]

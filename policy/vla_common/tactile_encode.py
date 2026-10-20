@@ -67,7 +67,7 @@ class TactileEncoder(nn.Module):
             raise ValueError("encode mode requires tactile keys")
         if config.freeze_tactile_encoder:
             self.backbone.requires_grad_(False)
-        feature_dim = 2048 if method == "ResNet" and size == "B" and self.mode in {"full", "pool"} else self.backbone.embed_dim
+        feature_dim = 2048 if method == "ResNet" and size == "B" and self.mode == "full" else self.backbone.embed_dim
         self.proj = nn.Linear(feature_dim, output_dim)
         from encoder.pretrained_registry import constructor_metadata
         config.tactile_encoder_config = {**constructor_metadata(state), **{
@@ -79,6 +79,13 @@ class TactileEncoder(nn.Module):
             config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
+        if self.mode == "pool" and self.pretrained_mode == 'univtac':
+            from .tactile_pooling import univtac_pool_tokens
+            from torch.nn import functional as F
+            if x.ndim == 4:
+                x = F.interpolate(x, size=(self.image_size, self.image_size),
+                                  mode='bilinear', align_corners=False)
+            return univtac_pool_tokens(self.backbone, self.method, x)
         tokens = self._unpooled_tokens(x)
         if self.mode == "pool":
             from .tactile_pooling import pool_tactile_tokens
