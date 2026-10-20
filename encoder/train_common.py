@@ -19,18 +19,21 @@ from modality import INPUT_CHANNELS, read_tactile
 from linear_depth_deform import DEPTH_DEFORM_SPECS, depth_deform_spec
 from modality import tactile_from_arrays
 from image_io import require_rgb_model
+from pretrained_registry import history_indices, result_root
+from checkpoint_io import save_checkpoint
 
 
 class TactileFrames(Dataset):
     def __init__(self, files, limit=None, temporal=False, seed=42,
                  input_mode='marker_rgb', lengths=None, action_conditioned=False,
-                 future_horizon=1, action_mean=None, action_std=None):
+                 future_horizon=1, action_mean=None, action_std=None, num_frames=1):
         self.temporal = temporal
         self.action_conditioned = action_conditioned
         self.future_horizon = future_horizon
         self.action_mean = action_mean
         self.action_std = action_std
         self.input_mode = input_mode
+        self.num_frames = num_frames
         self.rows = []
         self.handles = {}
         self.mapped_arrays = {}
@@ -100,6 +103,8 @@ class TactileFrames(Dataset):
     def __getitem__(self, index):
         path, side, step = self.rows[index]
         image = self._read(path, side, step)
+        if self.num_frames > 1 and not self.action_conditioned:
+            image = torch.stack([self._read(path, side, t) for t in history_indices(step, self.num_frames, 2)])
         if self.action_conditioned:
             future = self._read(path, side, step + self.future_horizon)
             action = self._joint_action(path, step + self.future_horizon)
@@ -144,8 +149,7 @@ class FileChunkBatchSampler(Sampler):
         self.epoch = 0
 
     def __len__(self):
-        chunks = sum(math.ceil(len(group) / self.chunk_size) for group in self.groups.values())
-        return math.ceil(chunks / max(1, self.batch_size // self.chunk_size))
+        return sum(map(len, self.groups.values())) // self.batch_size
 
     def __iter__(self):
         rng = random.Random(self.seed + self.epoch)
@@ -157,9 +161,12 @@ class FileChunkBatchSampler(Sampler):
             chunks.extend(indices[start:start + self.chunk_size]
                           for start in range(0, len(indices), self.chunk_size))
         rng.shuffle(chunks)
-        per_batch = max(1, self.batch_size // self.chunk_size)
-        for start in range(0, len(chunks), per_batch):
-            yield [index for chunk in chunks[start:start + per_batch] for index in chunk]
+        batch = []
+        for chunk in chunks:
+            batch.extend(chunk)
+            while len(batch) >= self.batch_size:
+                yield batch[:self.batch_size]
+                batch = batch[self.batch_size:]
 
 
 @torch.no_grad()
@@ -229,9 +236,11 @@ def run(args):
                             pin_memory=True, persistent_workers=args.workers > 0)
         val_data.rows.sort()
     else:
-        loader = DataLoader(train_data, shuffle=True,
+        loader = DataLoader(train_data, shuffle=True, drop_last=True,
                             generator=torch.Generator().manual_seed(args.seed), **loader_options)
     val_loader = DataLoader(val_data, shuffle=False, **loader_options)
+    if not len(loader):
+        raise ValueError('Encoder training requires at least 64 training anchors')
     train_probe = val_probe = None
     if args.checkpoint_metric == 'knn':
         if args.probe_per_class_train < 1 or args.probe_per_class_val < 1:
@@ -277,11 +286,11 @@ def run(args):
         best_probe_accuracy = saved.get('best_probe_accuracy', -1.0)
         stale_epochs = saved.get('stale_epochs', 0)
     family = 'resnet' if args.method == 'ResNet' else 'vit'
-    out = args.output_dir or (args.resume.parent if args.resume else None) or (project_root / 'encoder_results' / args.input_mode /
-                              args.method / args.size /
+    out = args.output_dir or (args.resume.parent if args.resume else None) or (result_root(args.input_mode, 'univtac', args.method, args.size) /
                               datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     out.mkdir(parents=True, exist_ok=True)
     config = vars(args).copy()
+    config.update(pretrained_mode='univtac', num_frames=1, frame_stride=1)
     config["color_order"] = "RGB"
     if args.input_mode in DEPTH_DEFORM_SPECS:
         config['depth_deform_encoding'] = depth_deform_spec(args.input_mode)
@@ -422,7 +431,8 @@ def run(args):
         print(json.dumps(validation_record), flush=True)
         core = model.module if isinstance(model, nn.DataParallel) else model
         if not args.no_save:
-            checkpoint = {'format_version': 2, 'color_order': 'RGB', 'method': args.method, 'size': args.size,
+            checkpoint = {'format_version': 3, 'color_order': 'RGB', 'method': args.method, 'size': args.size,
+                          'pretrained_mode': 'univtac', 'num_frames': 1, 'frame_stride': 1,
                           'architecture': family,
                           'image_size': 224, 'input_mode': args.input_mode,
                           'in_chans': INPUT_CHANNELS[args.input_mode],
@@ -434,12 +444,12 @@ def run(args):
                           'knn_accuracy': probe_accuracy,
                           'best_probe_accuracy': best_probe_accuracy,
                           'stale_epochs': stale_epochs}
-            torch.save(checkpoint, out / 'last.pth')
+            save_checkpoint(checkpoint, out / 'last.pth')
             if improved:
                 if args.method == 'VAE':
                     # Keep the matching encoder/decoder for best-epoch reconstruction.
-                    torch.save(checkpoint, out / 'best.pth')
-                torch.save({key: checkpoint[key] for key in ('format_version', 'method', 'size', 'architecture',
+                    save_checkpoint(checkpoint, out / 'best.pth')
+                save_checkpoint({key: checkpoint[key] for key in ('format_version', 'pretrained_mode', 'num_frames', 'frame_stride', 'method', 'size', 'architecture',
                             'image_size', 'input_mode', 'in_chans', 'color_order', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
                             'val_loss', 'best_val_loss', 'knn_accuracy',
                             'best_probe_accuracy')}, out / 'encoder.pth')
@@ -459,7 +469,7 @@ def main(default_method=None):
     parser.add_argument('--config', type=Path)
     parser.add_argument('--samples', type=int)
     parser.add_argument('--epochs', type=int)
-    parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--batch-size', type=int, choices=[64])
     parser.add_argument('--workers', type=int)
     parser.add_argument('--lr', type=float)
     parser.add_argument('--weight-decay', type=float)
@@ -500,6 +510,8 @@ def main(default_method=None):
     for key, value in defaults.items():
         if getattr(args, key) is None:
             setattr(args, key, value)
+    if args.batch_size != 64:
+        parser.error('All encoder training batches must be 64, including config overrides')
     run(args)
 
 

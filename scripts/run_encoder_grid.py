@@ -58,7 +58,7 @@ def main():
     parser.add_argument('--inputs', default=','.join(INPUTS))
     parser.add_argument('--samples', type=int, default=256)
     parser.add_argument('--epochs', type=int, default=1)
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=64, choices=[64])
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--max-steps', type=int, default=2)
     parser.add_argument('--max-val-steps', type=int, default=1)

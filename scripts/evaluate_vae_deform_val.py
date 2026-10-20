@@ -48,7 +48,7 @@ def main():
     torch.set_num_threads(4);torch.manual_seed(42)
     device=torch.device(args.device)
     if device.type=='cuda' and not torch.cuda.is_available():raise RuntimeError('CUDA required but unavailable')
-    runs=[max((r.parent for r in (ROOT/'encoder_results'/mode/'VAE/S').glob('*/last.pth')),key=lambda r:r.name) for mode in MODES]
+    runs=[max((r.parent for r in (ROOT/'encoder_results'/mode/'univtac/VAE/S').glob('*/last.pth')),key=lambda r:r.name) for mode in MODES]
     configs=[json.loads((run/'config.json').read_text()) for run in runs]
     for c in configs:
         for key in ('train_files','val_files','val_count','seed'):assert c[key]==configs[0][key],key

@@ -76,7 +76,13 @@ CUDA_VISIBLE_DEVICES=0 bash train_encoder.sh \
   --method ResNet --size S --input marker_rgb
 ```
 
-权重和日志保存到 `encoder_results/<input>/<method>/<size>/<时间>/`。
+权重和日志保存到 `encoder_results/<input>/<pretrained_mode>/<method>/<size>/<时间>/`。
+
+`train_encoder.sh` 用 `PRETRAINED_MODE=univtac|tactile|vision` 区分权重来源；
+`train_policy.sh` 对应使用 `ENCODER_PRETRAINED_MODE` 和 `ENCODER_METHOD`。
+时序 encoder 使用 4 帧、stride 2；Wan2.2-VAE 使用 5 帧、stride 2，并内置 2×2 latent patchify，输出每路 98×192。外部 encoder 随 policy 一起训练。
+所有 encoder 的训练 batch 固定为 64；本地改造版记为 `V-JEPA*`（代码标识仍为 `V-JEPA`）。
+官方权重下载、checkpoint 迁移、微调参数与使用示例见 [预训练 encoder 说明](encoder/PRETRAINED.md)。
 
 ### Policy
 

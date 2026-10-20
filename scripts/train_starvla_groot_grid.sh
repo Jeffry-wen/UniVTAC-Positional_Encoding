@@ -27,12 +27,12 @@ fi
 
 # Fixed, previously trained S checkpoints, grouped by tactile input mode.
 declare -A CKPT
-CKPT[marker_rgb/ResNet]="$ROOT/encoder_results/marker_rgb/ResNet/S/20260930-200744-984819/encoder.pth"
-CKPT[marker_rgb/VAE]="$ROOT/encoder_results/marker_rgb/VAE/S/20260930-204950-862027/encoder.pth"
-CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/MAE/S/20260930-211901-297263/encoder.pth"
-CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/DINOv2/S/20260930-214410-965503/encoder.pth"
-CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/I-JEPA/S/20261001-073312-844529/encoder.pth"
-CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/V-JEPA/S/20261001-073312-845111/encoder.pth"
+CKPT[marker_rgb/ResNet]="$ROOT/encoder_results/marker_rgb/univtac/ResNet/S/20260930-200744-984819/encoder.pth"
+CKPT[marker_rgb/VAE]="$ROOT/encoder_results/marker_rgb/univtac/VAE/S/20260930-204950-862027/encoder.pth"
+CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/univtac/MAE/S/20260930-211901-297263/encoder.pth"
+CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/univtac/DINOv2/S/20260930-214410-965503/encoder.pth"
+CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/univtac/I-JEPA/S/20261001-073312-844529/encoder.pth"
+CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/univtac/V-JEPA/S/20261001-073312-845111/encoder.pth"
 
 IFS=',' read -r -a GPUS <<< "$GPUS_CSV"
 if ((${#GPUS[@]} != 4)); then
@@ -46,7 +46,7 @@ fi
 for input in "${INPUTS[@]}"; do
   for method in "${METHODS[@]}"; do
     if [[ "$input" == depth_deform_* ]]; then
-      CKPT[$input/$method]="$(find "$ROOT/encoder_results/$input/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+      CKPT[$input/$method]="$(find "$ROOT/encoder_results/$input/univtac/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
     fi
     ckpt="${CKPT[$input/$method]}"
     if [[ ! -s "$ckpt" ]]; then

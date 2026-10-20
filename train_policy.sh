@@ -41,10 +41,11 @@ esac
 
 TACTILE_MODE="${TACTILE_MODE:-encode}"     # none | as_image | encode | native (N0)
 TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-${INPUT_MODE:-marker_rgb}}" # marker_only | rgb_only | marker_rgb | depth_deform_20 | depth_deform_80 | depth_deform_160 | depth_deform_240 | depth_deform_nonlinear | depth_deform_nonlinear_radial
-TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full (encode only)
+TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full | pool (encode only)
 TACTILE_INSERT_LOCATION="${TACTILE_INSERT_LOCATION:-encoder}"
+ENCODER_PRETRAINED_MODE="${ENCODER_PRETRAINED_MODE:-univtac}" # univtac | tactile | vision
 ENCODER_METHOD="${ENCODER_METHOD:-VAE}"
-ENCODER_SIZE="${ENCODER_SIZE:-S}"
+ENCODER_SIZE="${ENCODER_SIZE:-}"
 ENCODER_CKPT="${ENCODER_CKPT:-}"
 
 STEPS="${STEPS:-5_0000}"
@@ -82,9 +83,12 @@ if [[ ! "$CHUNK_SIZE" =~ ^[1-9][0-9]*$ || ! "$N_ACTION_STEPS" =~ ^[1-9][0-9]*$ ]
   exit 2
 fi
 
+if [[ -z "$ENCODER_SIZE" ]]; then
+  ENCODER_SIZE="$("$PYTHON_BIN" -c 'import sys; from encoder.pretrained_registry import default_size; print(default_size(*sys.argv[1:]))' "$ENCODER_PRETRAINED_MODE" "$ENCODER_METHOD")"
+fi
 if [[ "$TACTILE_MODE" == encode && -z "$ENCODER_CKPT" ]]; then
-  ENCODER_CKPT="$(find "$ROOT/encoder_results/$TACTILE_INPUT_MODE/$ENCODER_METHOD/$ENCODER_SIZE" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-)"
-  if [[ -z "$ENCODER_CKPT" ]]; then
+  ENCODER_CKPT="$(find "$ROOT/encoder_results/$TACTILE_INPUT_MODE/$ENCODER_PRETRAINED_MODE/$ENCODER_METHOD/$ENCODER_SIZE" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+  if [[ -z "$ENCODER_CKPT" && "$ENCODER_PRETRAINED_MODE" != tactile ]]; then
     echo "No encoder checkpoint found; set ENCODER_CKPT or run train_encoder.sh" >&2
     exit 2
   fi
@@ -96,7 +100,7 @@ RUN_LABEL="${POLICY}_${TRAINING_MODE}_${TASK_LABEL}_${TACTILE_MODE}"
 if [[ "$ACTION_MODE" == relative_joint ]]; then RUN_LABEL+="_relative_joint"; fi
 if [[ "$TACTILE_MODE" != none ]]; then RUN_LABEL+="_${TACTILE_INPUT_MODE}"; fi
 if [[ "$TACTILE_MODE" == encode ]]; then
-  RUN_LABEL+="_${ENCODER_METHOD}_${ENCODER_SIZE}_${TACTILE_TYPE}_${TACTILE_INSERT_LOCATION}"
+  RUN_LABEL+="_${ENCODER_PRETRAINED_MODE}_${ENCODER_METHOD}_${ENCODER_SIZE}_${TACTILE_TYPE}_${TACTILE_INSERT_LOCATION}"
 fi
 RUN_NAME="$(date +%Y%m%d-%H%M%S-%N)_${RUN_LABEL}"
 OUTPUT_DIR="${OUTPUT_DIR:-$OUTPUT_ROOT/$RUN_NAME}"
@@ -119,7 +123,7 @@ if [[ "$POLICY" == n0vtla ]]; then
          --tokenizer-path "${N0_TOKENIZER_PATH:-$ROOT/resources/pretrained_models/pi05_base/paligemma-3b-pt-224-tokenizer}")
 fi
 if [[ "$SAVE_CHECKPOINT" == false ]]; then args+=(--no-save-checkpoint); fi
-args+=(--encoder-method "$ENCODER_METHOD" --encoder-size "$ENCODER_SIZE")
+args+=(--encoder-pretrained-mode "$ENCODER_PRETRAINED_MODE" --encoder-method "$ENCODER_METHOD" --encoder-size "$ENCODER_SIZE")
 if ((NUM_PROCESSES > 1)); then
   # --standalone selects an unused rendezvous port, allowing concurrent jobs.
   exec "$PYTHON_BIN" -u -m torch.distributed.run --standalone --nnodes=1 \

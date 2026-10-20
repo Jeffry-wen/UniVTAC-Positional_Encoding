@@ -45,7 +45,7 @@ def main():
     cases=[('training','Training deformation',train),('test_max','Test Deformation',test)]
     inputs=[];predictions=[];checkpoints=[];metrics=[]
     for mode in MODES:
-        run=max((p.parent for p in (ROOT/'encoder_results'/mode/'VAE/S').glob('*/last.pth')),key=lambda p:p.name)
+        run=max((p.parent for p in (ROOT/'encoder_results'/mode/'univtac/VAE/S').glob('*/last.pth')),key=lambda p:p.name)
         config=json.loads((run/'config.json').read_text())
         checkpoint=torch.load(run/'last.pth',map_location='cpu',weights_only=False)
         require_depth_deform_encoding(checkpoint,mode)

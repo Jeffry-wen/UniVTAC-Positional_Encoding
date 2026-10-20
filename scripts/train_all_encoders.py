@@ -19,7 +19,7 @@ INPUTS = ('marker_rgb', 'marker_only', 'rgb_only', 'depth_deform_20', 'depth_def
 def train(case, gpu, data_root):
     method, size, input_mode = case
     run_id = datetime.utcnow().strftime('%Y%m%d-%H%M%S-%f')
-    output = ROOT / 'encoder_results' / input_mode / method / size / run_id
+    output = ROOT / 'encoder_results' / input_mode / 'univtac' / method / size / run_id
     command = [str(ROOT / 'train_encoder.sh'), '--method', method, '--size', size,
                '--input', input_mode, '--data-root', str(data_root), '--',
                '--output-dir', str(output)]
@@ -76,7 +76,7 @@ def main():
                 return rows
             if args.skip_completed:
                 method, size, input_mode = case
-                base = ROOT / 'encoder_results' / input_mode / method / size
+                base = ROOT / 'encoder_results' / input_mode / 'univtac' / method / size
                 completed = []
                 for status_path in base.glob('*/status.json'):
                     status = json.loads(status_path.read_text())

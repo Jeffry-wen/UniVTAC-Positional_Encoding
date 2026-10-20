@@ -67,7 +67,7 @@ class VAEEncoder(nn.Module):
         return self.parameters_for_latent(images)[0]
 
     def forward(self, images):
-        return self.latent_tokens(images).mean(dim=1)
+        return self.vit(images)
 
 
 class VAE(nn.Module):

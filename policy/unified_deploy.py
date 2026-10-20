@@ -58,6 +58,9 @@ def make_vla_config(run, device, models_root):
         tactile_input_mode=options["tactile_input_mode"], tactile_type=options["tactile_type"],
         tactile_insert_location=options["tactile_insert_location"],
         tactile_encoder_path=None, tactile_encoder_config=saved.get("tactile_encoder_config"),
+        tactile_encoder_pretrained_mode=saved.get('encoder_pretrained_mode', 'univtac'),
+        tactile_num_frames=saved.get('tactile_num_frames', 1),
+        tactile_frame_offset=saved.get('tactile_frame_stride', 1),
         state_mode=saved["state_mode"], action_mode=options["action_mode"], action_gap=saved["action_gap"])
     common["chunk_size"] = saved.get("chunk_size", saved["base"].get("chunk_size", options["chunk_size"]))
     if "n_action_steps" in saved:
@@ -98,6 +101,10 @@ class Policy(BasePolicy):
         self.camera_keys = self.run["camera_keys"]
         self.tactile_mode = self.options.get("tactile_mode", "none")
         self.tactile_input_mode = self.options.get("tactile_input_mode", "marker_rgb")
+        self.encoder_pretrained_mode = self.run['config'].get('encoder_pretrained_mode', 'univtac')
+        self.tactile_num_frames = self.run['config'].get('tactile_num_frames', 1)
+        self.tactile_frame_stride = self.run['config'].get('tactile_frame_stride', 1)
+        self.tactile_background_offset = (130/255 if self.options.get('encoder_method') == 'AnyTouch2' else .5)
         if self.tactile_mode != "none":
             from encoder.linear_depth_deform import require_depth_deform_encoding
             require_depth_deform_encoding(self.run["config"], self.tactile_input_mode)
@@ -290,6 +297,18 @@ class Policy(BasePolicy):
                     batch[f"observation.images.tac_{side}.baseline"] = self.tactile_baselines[side].unsqueeze(0)
                     continue
                 tactile = tactile_from_arrays(raw, self.tactile_input_mode, self.image_size)
+                if getattr(self, 'encoder_pretrained_mode', 'univtac') == 'tactile' and self.tactile_input_mode in ('rgb_only', 'marker_rgb'):
+                    if side not in self.tactile_baselines:
+                        self.tactile_baselines[side] = tactile.clone()
+                    tactile = (tactile - self.tactile_baselines[side] + self.tactile_background_offset).clamp(0, 1)
+                if getattr(self, 'tactile_num_frames', 1) > 1:
+                    depth = (self.tactile_num_frames - 1) * self.tactile_frame_stride + 1
+                    if side not in self.tactile_history:
+                        self.tactile_history[side] = deque([tactile] * depth, maxlen=depth)
+                    self.tactile_history[side].append(tactile)
+                    from encoder.pretrained_registry import history_indices
+                    tactile = torch.stack([self.tactile_history[side][i]
+                        for i in history_indices(depth - 1, self.tactile_num_frames, self.tactile_frame_stride)])
                 batch[f"observation.images.tac_{side}"] = tactile.unsqueeze(0)
         if self.tokenizer is not None:
             if self.kind == "n0vtla":
@@ -302,8 +321,8 @@ class Policy(BasePolicy):
                 for key, value in batch.items()}
 
     @torch.no_grad()
-    def predict_chunk(self, observation):
-        batch = self.encode_obs(observation)
+    def predict_chunk(self, observation, batch=None):
+        batch = self.encode_obs(observation) if batch is None else batch
         if self.record_policy_video or self.save_policy_inputs:
             self.last_video_images = {key: value.detach().cpu().clone() for key, value in batch.items()
                                       if key.startswith("observation.images.")}
@@ -333,15 +352,17 @@ class Policy(BasePolicy):
         return decode_joint_actions(anchor, actions[0].float(), self.action_mode)
 
     def eval(self, task, observation):
+        # Advance tactile history at EVERY environment step, including queued actions.
+        batch = self.encode_obs(observation) if getattr(self, 'tactile_num_frames', 1) > 1 else None
         if self.kind == "act" and self.temporal_agg:
-            self.history.append((self.time, self.predict_chunk(observation)))
+            self.history.append((self.time, self.predict_chunk(observation, batch)))
             self.history = [(start, chunk) for start, chunk in self.history if self.time - start < len(chunk)]
             candidates = torch.stack([chunk[self.time - start] for start, chunk in self.history])
             weights = torch.exp(-0.01 * torch.arange(len(candidates), device=candidates.device))
             action = (candidates * (weights / weights.sum())[:, None]).sum(0)
         else:
             if not self.actions:
-                self.actions.extend(self.predict_chunk(observation)[:self.execution_horizon])
+                self.actions.extend(self.predict_chunk(observation, batch)[:self.execution_horizon])
             action = self.actions.popleft()
         recorder = getattr(task, "policy_input_recorder", None)
         if recorder is not None:
@@ -356,6 +377,7 @@ class Policy(BasePolicy):
         self.last_video_observation = None
         self.last_video_input_step = None
         self.tactile_baselines = {}
+        self.tactile_history = {}
         self.actions = deque()
         self.history = []
         self.time = 0

@@ -1,9 +1,8 @@
-"""Compare single-GPU batch size and learning rate on a fixed file-level split."""
+"""Compare learning rates at fixed batch size 64 on a fixed file-level split."""
 import argparse
 import csv
 import json
 import os
-import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,30 +17,10 @@ METHODS = ('ResNet', 'VAE', 'MAE', 'DINOv2', 'I-JEPA', 'V-JEPA')
 INPUTS = ('marker_only', 'rgb_only', 'marker_rgb', 'depth_deform_20', 'depth_deform_80', 'depth_deform_160', 'depth_deform_240', 'depth_deform_nonlinear', 'depth_deform_nonlinear_radial')
 
 
-def large_batches(paths):
-    selected = {}
-    for path in paths:
-        with path.open() as handle:
-            for row in csv.DictReader(handle):
-                if row['exit_code'] != '0':
-                    continue
-                key = (row['method'], row['size'])
-                batch = int(re.search(r'batch_(\d+)', path.parent.name).group(1))
-                if batch < 256:
-                    continue
-                peak = float(json.loads(row['gpu_peak_gb'])[0])
-                if peak >= 72:
-                    continue
-                speed = float(row.get('actual_batch_size') or batch) / float(row['batch_seconds'])
-                if key not in selected or speed > selected[key][0]:
-                    selected[key] = (speed, batch)
-    return {key: item[1] for key, item in selected.items()}
-
-
 def run_trial(case, args, gpu):
     method, size, input_mode, batch, lr = case
     run_id = datetime.utcnow().strftime('%Y%m%d-%H%M%S-%f')
-    output = ROOT / 'encoder_results' / input_mode / method / size / run_id
+    output = ROOT / 'encoder_results' / input_mode / 'univtac' / method / size / run_id
     command = [str(ROOT / 'train_encoder.sh'), '--method', method, '--size', size,
                '--input', input_mode, '--data-root', str(args.data_root), '--',
                '--samples', str(args.samples), '--epochs', str(args.epochs),
@@ -81,8 +60,8 @@ def run_trial(case, args, gpu):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root', type=Path, default=ROOT / 'resources/data/contact')
-    parser.add_argument('--batch-results', type=Path, nargs='+')
-    parser.add_argument('--batch-source', choices=('compare', 'config'), default='compare')
+    parser.add_argument('--batch-results', type=Path, nargs='+', help='Legacy argument; batch is always 64')
+    parser.add_argument('--batch-source', choices=('compare', 'config'), default='config', help='Legacy argument; batch is always 64')
     parser.add_argument('--inputs', default='marker_rgb')
     parser.add_argument('--methods', default=','.join(METHODS))
     parser.add_argument('--scales', default='0.3,1,2')
@@ -93,15 +72,11 @@ def main():
     parser.add_argument('--gpus', default='0,1')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    if args.batch_source == 'compare' and not args.batch_results:
-        parser.error('--batch-results is required for --batch-source compare')
-    large = large_batches(args.batch_results) if args.batch_source == 'compare' else {}
     cases = []
     for method in args.methods.split(','):
         settings = yaml.safe_load((ROOT / 'encoder' / method / 'config.yml').read_text())
         for size in ('S', 'B'):
-            batches = (sorted({64, 256, large[(method, size)]})
-                       if args.batch_source == 'compare' else [settings[size]['batch_size']])
+            batches = [64]
             for input_mode in args.inputs.split(','):
                 if input_mode not in INPUTS:
                     parser.error(f'Unknown input mode: {input_mode}')

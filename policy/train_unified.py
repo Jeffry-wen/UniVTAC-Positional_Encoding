@@ -216,7 +216,9 @@ def compute_stats(files_by_task: dict[str, list[Path]], action_mode="absolute_jo
 
 class UniVTACDataset(Dataset):
     def __init__(self, files_by_task, *, cameras, tactile_mode, tactile_input_mode,
-                 chunk_size, stats, policy, image_size, action_mode="absolute_joint"):
+                 chunk_size, stats, policy, image_size, action_mode="absolute_joint",
+                 tactile_num_frames=1, tactile_frame_stride=1, tactile_pretrained_mode='univtac',
+                 tactile_background_offset=.5):
         self.rows = []
         self.task_counts = defaultdict(int)
         self.cameras = cameras
@@ -228,6 +230,10 @@ class UniVTACDataset(Dataset):
         self.image_size = image_size
         self.action_mode = joint_action_mode(action_mode)
         self._baselines = {}
+        self.tactile_num_frames = tactile_num_frames
+        self.tactile_frame_stride = tactile_frame_stride
+        self.tactile_pretrained_mode = tactile_pretrained_mode
+        self.tactile_background_offset = tactile_background_offset
         self._files = {}
         for task, paths in files_by_task.items():
             for path in paths:
@@ -299,7 +305,15 @@ class UniVTACDataset(Dataset):
                     from policy.n0vtla.observation_adapter import read_native_tactile
                     tactile = read_native_tactile(f, side, t, self.tactile_input_mode)
                 else:
-                    tactile = read_tactile(f, side, t, self.tactile_input_mode, self.image_size)
+                    from encoder.pretrained_registry import history_indices
+                    indices = history_indices(t, self.tactile_num_frames, self.tactile_frame_stride)
+                    frames = [read_tactile(f, side, i, self.tactile_input_mode, self.image_size) for i in indices]
+                    tactile = torch.stack(frames) if self.tactile_num_frames > 1 else frames[0]
+                    if self.tactile_pretrained_mode == 'tactile' and self.tactile_input_mode in ('rgb_only', 'marker_rgb'):
+                        key = (path, side)
+                        if key not in self._baselines:
+                            self._baselines[key] = read_tactile(f, side, 0, self.tactile_input_mode, self.image_size)
+                        tactile = (tactile - self._baselines[key] + self.tactile_background_offset).clamp(0, 1)
                 if self.tactile_mode == "as_image" and tactile.shape[0] == 1:
                     tactile = tactile.repeat(3, 1, 1)
                 out[f"observation.images.tac_{side}"] = tactile
@@ -345,6 +359,9 @@ def make_config(args, base, camera_keys, tactile_keys):
                   wrist_camera_keys=[key for key in camera_keys if key.endswith("cam_wrist")],
                   tactile_keys=tactile_keys, tactile_mode=args.tactile_mode,
                   tactile_input_mode=args.tactile_input_mode, tactile_type=args.tactile_type,
+                  tactile_encoder_pretrained_mode=args.encoder_pretrained_mode,
+                  tactile_num_frames=args.tactile_num_frames, tactile_frame_offset=args.tactile_frame_stride,
+                  freeze_tactile_encoder=False,
                   tactile_encoder_path=str(args.encoder_ckpt) if args.tactile_mode == "encode" else None,
                   tactile_insert_location=args.tactile_insert_location,
                   state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1,
@@ -371,8 +388,31 @@ def run(args):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    if args.tactile_mode == "encode" and not args.encoder_ckpt:
-        raise ValueError("encode mode requires --encoder-ckpt")
+    if args.encoder_size is None:
+        from encoder.pretrained_registry import default_size
+        args.encoder_size = default_size(args.encoder_pretrained_mode, args.encoder_method)
+    args.tactile_num_frames, args.tactile_frame_stride = 1, 1
+    if args.tactile_mode == 'encode':
+        from encoder.pretrained_registry import validate_identity
+        validate_identity(args.encoder_pretrained_mode, args.encoder_method, args.encoder_size)
+        if not args.encoder_ckpt and args.encoder_pretrained_mode == 'tactile':
+            # Export once on rank zero. No download or random fallback during policy restore.
+            paths = [None]
+            if args.rank == 0:
+                from encoder.external import initial_metadata
+                paths[0] = str(initial_metadata('tactile', args.encoder_method, args.encoder_size, args.tactile_input_mode))
+            if args.world_size > 1:
+                dist.broadcast_object_list(paths, src=0)
+            args.encoder_ckpt = Path(paths[0])
+        if not args.encoder_ckpt:
+            raise ValueError('encode mode requires a trained encoder checkpoint')
+        encoder_state = torch.load(args.encoder_ckpt, map_location='cpu', weights_only=True)
+        if encoder_state.get('pretrained_mode', 'univtac') != args.encoder_pretrained_mode:
+            raise ValueError('Encoder checkpoint pretrained_mode does not match requested mode')
+        if encoder_state.get('method', args.encoder_method) != args.encoder_method or encoder_state.get('size', args.encoder_size) != args.encoder_size:
+            raise ValueError('Encoder checkpoint method/size does not match requested model')
+        args.tactile_num_frames = encoder_state.get('num_frames', 1)
+        args.tactile_frame_stride = encoder_state.get('frame_stride', 1)
     if args.tactile_mode == "encode" and args.tactile_input_mode in ("rgb_only", "marker_rgb"):
         require_rgb_model(torch.load(args.encoder_ckpt, map_location="cpu", weights_only=True))
     if args.tactile_mode == "encode" and args.tactile_input_mode in DEPTH_DEFORM_SPECS:
@@ -403,7 +443,11 @@ def run(args):
     make_ds = lambda files: UniVTACDataset(files, cameras=cameras, tactile_mode=args.tactile_mode,
                                            tactile_input_mode=args.tactile_input_mode,
                                            chunk_size=args.chunk_size, stats=stats,
-                                           policy=args.policy, image_size=image_size, action_mode=args.action_mode)
+                                           policy=args.policy, image_size=image_size, action_mode=args.action_mode,
+                                           tactile_num_frames=args.tactile_num_frames,
+                                           tactile_frame_stride=args.tactile_frame_stride,
+                                           tactile_pretrained_mode=args.encoder_pretrained_mode,
+                                           tactile_background_offset=130/255 if args.encoder_method == 'AnyTouch2' else .5)
     train_ds, val_ds = make_ds(train_files), make_ds(val_files)
     weights = [1.0 / train_ds.task_counts[task] for task, _, _ in train_ds.rows]
     if args.world_size > 1:
@@ -438,6 +482,7 @@ def run(args):
                     tactile_names=["tac_left", "tac_right"] if args.tactile_mode != "none" else [],
                     tactile_ckpt=str(args.encoder_ckpt) if args.tactile_mode == "encode" else None,
                     tactile_input_mode=args.tactile_input_mode, tactile_type=args.tactile_type,
+                    tactile_encoder_pretrained_mode=args.encoder_pretrained_mode,
                     batch_size=args.batch_size, num_steps=args.steps, save_freq=args.save_freq, device=args.device,
                     ckpt_dir=str(output), task_name=tasks[0] if len(tasks) == 1 else "multi_task",
                     seed=args.seed, num_epochs=1)
@@ -455,8 +500,8 @@ def run(args):
                        "routing": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}}
         if args.tactile_mode == "encode":
             encoder_state = torch.load(args.encoder_ckpt, map_location="cpu", weights_only=True)
-            config_dump["tactile_encoder_config"] = {key: encoder_state[key] for key in
-                ("method", "size", "architecture", "image_size", "input_mode", "in_chans", "depth_deform_encoding", "color_order") if key in encoder_state}
+            from encoder.pretrained_registry import constructor_metadata
+            config_dump["tactile_encoder_config"] = constructor_metadata(encoder_state)
         tokenizer = None
     elif args.policy == "n0vtla":
         from transformers import AutoTokenizer
@@ -516,6 +561,9 @@ def run(args):
     if args.tactile_input_mode in DEPTH_DEFORM_SPECS:
         config_dump["depth_deform_encoding"] = depth_deform_spec(args.tactile_input_mode)
     config_dump["color_order"] = "RGB"
+    config_dump.update(tactile_num_frames=args.tactile_num_frames,
+                       tactile_frame_stride=args.tactile_frame_stride,
+                       encoder_pretrained_mode=args.encoder_pretrained_mode)
     config_dump.update(state_mode="absolute_joint", action_mode=args.action_mode, action_gap=1,
                        n_action_steps=args.n_action_steps)
     config_dump["distributed"] = {"world_size": args.world_size, "global_batch_size": args.batch_size,
@@ -641,11 +689,13 @@ def main():
                    help="absolute[_joint] or relative[_joint]; relative arm targets use the current observation; gripper stays absolute")
     p.add_argument("--tactile-mode", choices=["none", "as_image", "encode", "native"], default="none")
     p.add_argument("--tactile-input-mode", choices=list(INPUT_CHANNELS), default="marker_rgb")
-    p.add_argument("--tactile-type", choices=["cls", "full"], default="cls")
+    p.add_argument("--tactile-type", choices=["cls", "full", "pool"], default="cls",
+                   help="cls: global token; full: all tokens; pool: adaptive 3x3 spatial tokens")
     p.add_argument("--tactile-insert-location", choices=["encoder", "decoder"], default="decoder")
     p.add_argument("--encoder-ckpt", type=Path)
     p.add_argument("--encoder-method", default="ResNet")
-    p.add_argument("--encoder-size", choices=["S", "B"], default="S")
+    p.add_argument('--encoder-pretrained-mode', choices=['univtac', 'tactile', 'vision'], default='univtac')
+    p.add_argument("--encoder-size", choices=["S", "B", "L"], default=None)
     p.add_argument("--cameras", choices=["auto", "head", "all"], default="auto")
     p.add_argument("--image-size", type=int, default=224)
     p.add_argument("--chunk-size", type=int, default=50)

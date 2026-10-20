@@ -25,7 +25,9 @@ class TactileEncoder(nn.Module):
             require_rgb_model(state)
         method = state.get("method")
         size = state.get("size")
-        if method not in {"ResNet", "VAE", "MAE", "DINOv2", "I-JEPA", "V-JEPA"}:
+        self.pretrained_mode = state.get('pretrained_mode', 'univtac')
+        config.tactile_encoder_pretrained_mode = self.pretrained_mode
+        if self.pretrained_mode == 'univtac' and method not in {"ResNet", "VAE", "MAE", "DINOv2", "I-JEPA", "V-JEPA"}:
             raise ValueError(f"Unsupported UniVTAC tactile checkpoint method: {method}")
         if state.get("input_mode") != config.tactile_input_mode:
             raise ValueError(f"Checkpoint input {state.get('input_mode')} != {config.tactile_input_mode}")
@@ -34,7 +36,10 @@ class TactileEncoder(nn.Module):
         encoder_dir = Path(__file__).resolve().parents[2] / "encoder"
         if str(encoder_dir) not in sys.path:
             sys.path.insert(0, str(encoder_dir))
-        if method == "ResNet":
+        if self.pretrained_mode != 'univtac':
+            from encoder.external import ExternalEncoder
+            self.backbone = ExternalEncoder(self.pretrained_mode, method, size, metadata=state, pretrained=False)
+        elif method == "ResNet":
             from ResNet.model import ResNetCNNEncoder
             self.backbone = ResNetCNNEncoder(size, state["in_chans"])
         elif method == "VAE":
@@ -46,7 +51,7 @@ class TactileEncoder(nn.Module):
             )
         elif method == "V-JEPA":
             self.backbone = importlib.import_module("V-JEPA.model").VJEPAEncoder(
-                size, in_chans=state["in_chans"]
+                size, in_chans=state["in_chans"], num_frames=state.get('num_frames', 1)
             )
         else:
             from vit_encoder import TactileViT
@@ -56,24 +61,38 @@ class TactileEncoder(nn.Module):
         self.method = method
         self.mode = config.tactile_type
         self.keys = list(config.tactile_encoder_keys())
-        self.image_size = int(state.get("image_size", 224))
+        self.image_size = state.get("image_size", 224)
+        self.num_frames = state.get('num_frames', 1)
         if not self.keys:
             raise ValueError("encode mode requires tactile keys")
         if config.freeze_tactile_encoder:
             self.backbone.requires_grad_(False)
-        feature_dim = 2048 if method == "ResNet" and size == "B" and self.mode == "full" else self.backbone.embed_dim
+        feature_dim = 2048 if method == "ResNet" and size == "B" and self.mode in {"full", "pool"} else self.backbone.embed_dim
         self.proj = nn.Linear(feature_dim, output_dim)
-        config.tactile_encoder_config = {
+        from encoder.pretrained_registry import constructor_metadata
+        config.tactile_encoder_config = {**constructor_metadata(state), **{
             "method": method, "size": size, "input_mode": state["input_mode"],
             "image_size": self.image_size, "in_chans": state["in_chans"],
             "tactile_type": self.mode, "color_order": "RGB",
-        }
+        }}
         if 'depth_deform_encoding' in state:
             config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
+        tokens = self._unpooled_tokens(x)
+        if self.mode == "pool":
+            from .tactile_pooling import pool_tactile_tokens
+            tokens = pool_tactile_tokens(
+                tokens, self.backbone, self.method, self.pretrained_mode,
+                includes_cls=self.pretrained_mode == 'univtac' and self.method in {'MAE', 'DINOv2'})
+        return tokens
+
+    def _unpooled_tokens(self, x: torch.Tensor) -> torch.Tensor:
         import torch.nn.functional as F
-        x = F.interpolate(x, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
+        if self.pretrained_mode != 'univtac':
+            return (self.backbone(x).unsqueeze(1) if self.mode == 'cls' else self.backbone.patch_tokens(x))
+        if x.ndim == 4:
+            x = F.interpolate(x, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
         if self.mode == "cls":
             return self.backbone(x).unsqueeze(1)
         if self.method == "ResNet":
@@ -93,7 +112,9 @@ class TactileEncoder(nn.Module):
             if key not in batch:
                 raise KeyError(f"Missing tactile input {key}")
             x = batch[key]
-            if x.ndim == 5:
+            if self.num_frames > 1:
+                encoded = self._tokens(x)
+            elif x.ndim == 5:
                 b, f, c, h, w = x.shape
                 x = x.reshape(b * f, c, h, w)
                 encoded = self._tokens(x).reshape(b, -1, self.proj.in_features)

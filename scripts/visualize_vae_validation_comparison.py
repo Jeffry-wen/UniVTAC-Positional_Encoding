@@ -125,7 +125,7 @@ def render(cases,arrays,metrics,checkpoints):
 def main():
     torch.set_num_threads(4);torch.manual_seed(42)
     OUT.mkdir(parents=True,exist_ok=True)
-    runs=[max((p.parent for p in (ROOT/'encoder_results'/mode/'VAE/S').glob('*/last.pth')),key=lambda p:p.name) for mode in MODES]
+    runs=[max((p.parent for p in (ROOT/'encoder_results'/mode/'univtac/VAE/S').glob('*/last.pth')),key=lambda p:p.name) for mode in MODES]
     configs=[json.loads((p/'config.json').read_text()) for p in runs]
     for c in configs:
         for k in ('val_files','train_files','val_count','seed'):assert c[k]==configs[0][k],k

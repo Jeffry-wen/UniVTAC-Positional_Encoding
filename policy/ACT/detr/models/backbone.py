@@ -20,6 +20,7 @@ sys.path.append(project_root)
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
+from policy.vla_common.tactile_pooling import pool_act_tactile_outputs
 
 import IPython
 
@@ -162,6 +163,7 @@ class TactileBackbone(nn.Module):
             self.backbone = IntermediateLayerGetter(backbone.backbone, return_layers=return_layers)
             self.position_embedding = position_embedding
  
+    @pool_act_tactile_outputs
     def forward(self, x):
         feat, pos = [], []
         if self.tactile_type == 'full':
@@ -211,7 +213,7 @@ class ViTTactileBackbone(nn.Module):
         elif method == 'I-JEPA':
             self.backbone = IJEPAEncoder(size, in_chans=channels)
         elif method == 'V-JEPA':
-            self.backbone = VJEPAEncoder(size, in_chans=channels)
+            self.backbone = VJEPAEncoder(size, in_chans=channels, num_frames=state.get('num_frames', 1))
         else:
             self.backbone = TactileViT(size, image_size=state['image_size'], in_chans=channels)
         if 'encoder' in state:
@@ -224,6 +226,7 @@ class ViTTactileBackbone(nn.Module):
             self.cls_position = nn.Embedding(1, 512)
         print(f'Loaded {method} ViT-{size} tactile encoder from {ckpt}')
 
+    @pool_act_tactile_outputs
     def forward(self, x):
         if self.tactile_type == 'full':
             if self.method == 'VAE':
@@ -234,6 +237,7 @@ class ViTTactileBackbone(nn.Module):
                 feat = tokens.transpose(1, 2).unsqueeze(2)
                 patches = tokens[:, 1:].transpose(1, 2).reshape(x.shape[0], self.num_channels, 14, 14)
                 patch_pos = self.position_embedding(patches).flatten(2).unsqueeze(2)
+                patch_pos = patch_pos.expand(x.shape[0], -1, -1, -1)
                 cls_pos = self.cls_position.weight[None].transpose(1, 2).unsqueeze(2).expand(x.shape[0], -1, -1, -1)
                 pos = torch.cat((cls_pos, patch_pos), dim=-1).to(feat.dtype)
                 return [feat], [pos]
@@ -246,6 +250,34 @@ class ViTTactileBackbone(nn.Module):
         feat = self.backbone(x)[:, :, None, None]
         pos = self.position_embedding.weight[:, :, None, None]
         return [feat], [pos]
+
+
+class RegisteredTactileBackbone(nn.Module):
+    """External / temporal encoder bridge; parameters live inside the ACT checkpoint."""
+    def __init__(self, state, position_embedding, tactile_type):
+        super().__init__()
+        encoder_dir = Path(__file__).resolve().parents[4] / 'encoder'
+        if str(encoder_dir) not in sys.path:
+            sys.path.insert(0, str(encoder_dir))
+        from encoder.external import ExternalEncoder
+        if state.get('pretrained_mode', 'univtac') == 'univtac':
+            from importlib import import_module
+            self.backbone = import_module('encoder.V-JEPA.model').VJEPAEncoder(
+                state['size'], in_chans=state['in_chans'], num_frames=state['num_frames'])
+        else:
+            self.backbone = ExternalEncoder(state['pretrained_mode'], state['method'], state['size'],
+                                             metadata=state, pretrained=False)
+        if 'encoder' in state:
+            self.backbone.load_state_dict(state['encoder'], strict=True)
+        self.num_channels = self.backbone.embed_dim
+        self.tactile_type = tactile_type
+        self.position_embedding = position_embedding
+
+    @pool_act_tactile_outputs
+    def forward(self, x):
+        tokens = self.backbone.patch_tokens(x) if self.tactile_type == 'full' else self.backbone(x)[:, None]
+        feat = tokens.transpose(1, 2).unsqueeze(2)
+        return [feat], [self.position_embedding(feat).to(feat.dtype)]
 
 
 class CNNTactileBackbone(nn.Module):
@@ -278,6 +310,7 @@ class CNNTactileBackbone(nn.Module):
             self.position_embedding = nn.Embedding(1, 512)
         print(f'Loaded ResNet-{size} tactile encoder from {ckpt}')
 
+    @pool_act_tactile_outputs
     def forward(self, x):
         if self.tactile_type == 'full':
             feat = self.backbone(x)['0']
@@ -290,11 +323,18 @@ def build_tactile_backbone(args):
     train_backbone = args.lr_tactile_backbone > 0
     return_interm_layers = args.tactile_masks
     tactile_type = args.tactile_type if hasattr(args, 'tactile_type') else 'cls'
+    # Pool mode uses the full backbone path, then pools features and positions.
+    if tactile_type == 'pool':
+        tactile_type = 'full'
     position_embedding = build_position_encoding(args)
     method = getattr(args, 'tactile_encoder_method', 'ResNet')
     state = getattr(args, 'tactile_encoder_config', None)
-    if state is None and method == 'ResNet' and args.tactile_ckpt:
+    if state is None and args.tactile_ckpt:
         state = torch.load(args.tactile_ckpt, map_location='cpu', weights_only=True)
+    if state and (state.get('pretrained_mode', 'univtac') != 'univtac' or
+                  (method == 'V-JEPA' and state.get('num_frames', 1) > 1)):
+        backbone = RegisteredTactileBackbone(state, position_embedding, tactile_type)
+        return configure_tactile_pooling(backbone, args, method, state)
     legacy_resnet = method == 'ResNet' and (state is None or ('encoder' not in state and 'method' not in state))
     if legacy_resnet:
         backbone = TactileBackbone(args.tactile_backbone, args.tactile_ckpt, args.tactile_names,
@@ -307,4 +347,11 @@ def build_tactile_backbone(args):
         backbone = ViTTactileBackbone(method, getattr(args, 'tactile_encoder_size', 'S'),
                                       args.tactile_ckpt, position_embedding, tactile_type,
                                       getattr(args, 'tactile_input_mode', 'marker_rgb'), state)
+    return configure_tactile_pooling(backbone, args, method, state)
+
+
+def configure_tactile_pooling(backbone, args, method, state):
+    backbone.pooling3x3 = getattr(args, 'tactile_type', 'cls') == 'pool'
+    backbone.pooling_method = method
+    backbone.pooling_pretrained_mode = (state or {}).get('pretrained_mode', 'univtac')
     return backbone

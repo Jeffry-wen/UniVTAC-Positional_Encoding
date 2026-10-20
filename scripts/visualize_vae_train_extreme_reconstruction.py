@@ -240,7 +240,7 @@ def render_radial_summary(cases,inputs,predictions,decoded_input,decoded_pred):
 def main():
     torch.set_num_threads(4);torch.manual_seed(42)
     OUT.mkdir(parents=True,exist_ok=True)
-    runs=[max((p.parent for p in (ROOT/'encoder_results'/mode/'VAE/S').glob('*/last.pth')),key=lambda p:p.name) for mode in MODES]
+    runs=[max((p.parent for p in (ROOT/'encoder_results'/mode/'univtac/VAE/S').glob('*/last.pth')),key=lambda p:p.name) for mode in MODES]
     configs=[json.loads((p/'config.json').read_text()) for p in runs]
     for config in configs:
         for key in ('train_files','val_files','seed','train_count'):

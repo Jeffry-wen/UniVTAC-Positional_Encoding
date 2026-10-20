@@ -88,7 +88,8 @@ class SensorRoutingMixin:
     # --- tactile routing ---
     tactile_mode: str = "none"  # none | as_image | encode
     tactile_input_mode: str = "marker_rgb"  # UniVTAC tactile representation
-    tactile_type: str = "cls"  # cls | full, for tactile_mode=encode
+    tactile_type: str = "cls"  # cls | full | pool, for tactile_mode=encode
+    tactile_encoder_pretrained_mode: str = "univtac"  # univtac | tactile | vision
     tactile_encoder_type: str | None = None  # None | anytouch2 | native (encode only)
     tactile_keys: list[str] = field(
         default_factory=lambda: [
@@ -315,6 +316,8 @@ class SensorRoutingMixin:
             raise ValueError(
                 f"Invalid tactile_mode '{self.tactile_mode}'. Expected one of {VALID_TACTILE_MODES}."
             )
+        if self.tactile_encoder_pretrained_mode not in ('univtac', 'tactile', 'vision'):
+            raise ValueError(f'Invalid tactile_encoder_pretrained_mode: {self.tactile_encoder_pretrained_mode}')
         # Normalise backward-compat aliases before checking.
         self._normalise_ee_modes()
         if self.state_mode not in VALID_STATE_MODES:

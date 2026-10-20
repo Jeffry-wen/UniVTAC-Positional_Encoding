@@ -13,9 +13,12 @@ SIGReg = import_module('I-JEPA.sigreg').SIGReg
 
 
 class VJEPAEncoder(TactileViT):
-    """Projected CLS latent; patch tokens remain available for ACT full mode."""
-    def __init__(self, size, in_chans=3):
+    """Single-frame projected ViT CLS for pretraining and policy input."""
+    def __init__(self, size, in_chans=3, num_frames=1):
+        if num_frames != 1:
+            raise ValueError('UniVTAC V-JEPA requires single-frame input; retrain multi-frame checkpoints')
         super().__init__(size, in_chans=in_chans)
+        self.num_frames = 1
         self.projector = nn.Sequential(
             nn.Linear(self.embed_dim, self.embed_dim, bias=False),
             nn.BatchNorm1d(self.embed_dim),
@@ -25,7 +28,18 @@ class VJEPAEncoder(TactileViT):
         )
 
     def forward(self, images):
-        return self.projector(self.tokens(images)[:, 0])
+        return self.projected_latent(images)
+
+    def projected_latent(self, images):
+        x = super().forward(images)
+        for layer in self.projector:
+            if isinstance(layer, nn.BatchNorm1d) and layer.training and x.shape[0] == 1:
+                # File-chunk batches can end with one sample; use the accumulated stats.
+                x = F.batch_norm(x, layer.running_mean, layer.running_var, layer.weight,
+                                 layer.bias, training=False, eps=layer.eps)
+            else:
+                x = layer(x)
+        return x
 
 
 class VJEPA(nn.Module):
@@ -47,10 +61,10 @@ class VJEPA(nn.Module):
         self.sigreg = SIGReg(projections=sigreg_projections)
 
     def forward(self, current, future, action):
-        context = self.encoder(current)
+        context = self.encoder.projected_latent(current)
         prediction = self.predict_future_latent(context, action)
         with torch.no_grad():
-            target = self.teacher(future)
+            target = self.teacher.projected_latent(future)
         prediction = prediction.float()
         target = target.float()
         prediction_loss = F.mse_loss(prediction, target)

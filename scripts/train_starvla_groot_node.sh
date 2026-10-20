@@ -32,12 +32,12 @@ OUT_ROOT="${OUTPUT_ROOT:-$ROOT/policy_results/starvla_groot_${NODE_LABEL}_${RUN_
 WORKERS="${WORKERS:-4}" # Per DDP rank: 8 processes x 4 workers on this node.
 METHODS=(ResNet VAE MAE DINOv2 I-JEPA V-JEPA)
 declare -A CKPT
-CKPT[marker_rgb/ResNet]="$ROOT/encoder_results/marker_rgb/ResNet/S/20260930-200744-984819/encoder.pth"
-CKPT[marker_rgb/VAE]="$ROOT/encoder_results/marker_rgb/VAE/S/20260930-204950-862027/encoder.pth"
-CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/MAE/S/20260930-211901-297263/encoder.pth"
-CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/DINOv2/S/20260930-214410-965503/encoder.pth"
-CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/I-JEPA/S/20261001-073312-844529/encoder.pth"
-CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/V-JEPA/S/20261001-073312-845111/encoder.pth"
+CKPT[marker_rgb/ResNet]="$ROOT/encoder_results/marker_rgb/univtac/ResNet/S/20260930-200744-984819/encoder.pth"
+CKPT[marker_rgb/VAE]="$ROOT/encoder_results/marker_rgb/univtac/VAE/S/20260930-204950-862027/encoder.pth"
+CKPT[marker_rgb/MAE]="$ROOT/encoder_results/marker_rgb/univtac/MAE/S/20260930-211901-297263/encoder.pth"
+CKPT[marker_rgb/DINOv2]="$ROOT/encoder_results/marker_rgb/univtac/DINOv2/S/20260930-214410-965503/encoder.pth"
+CKPT[marker_rgb/I-JEPA]="$ROOT/encoder_results/marker_rgb/univtac/I-JEPA/S/20261001-073312-844529/encoder.pth"
+CKPT[marker_rgb/V-JEPA]="$ROOT/encoder_results/marker_rgb/univtac/V-JEPA/S/20261001-073312-845111/encoder.pth"
 IFS=',' read -r -a GPU_IDS <<< "$GPUS_CSV"
 if ((${#GPU_IDS[@]} != 8)); then
   echo "GPUS must contain eight distinct GPU indices; got $GPUS_CSV" >&2
@@ -59,7 +59,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 for method in "${METHODS[@]}"; do
   if [[ "$INPUT" == depth_deform_* ]]; then
-    CKPT[$INPUT/$method]="$(find "$ROOT/encoder_results/$INPUT/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
+    CKPT[$INPUT/$method]="$(find "$ROOT/encoder_results/$INPUT/univtac/$method/S" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
   fi
   if [[ ! -s "${CKPT[$INPUT/$method]}" ]]; then
     echo "Missing encoder checkpoint: ${CKPT[$INPUT/$method]}" >&2

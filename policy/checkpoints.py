@@ -25,6 +25,7 @@ def training_options(config):
     options.setdefault("encoder_method", config.get("tactile_encoder_method", "ResNet"))
     options.setdefault("encoder_size", config.get("tactile_encoder_size", "S"))
     options.setdefault("tactile_insert_location", "decoder")
+    options.setdefault("tactile_type", config.get("tactile_type", "cls"))
     return options
 
 
@@ -46,6 +47,8 @@ def run_label(config):
     if tactile_mode != "none":
         parts.append(options.get("tactile_input_mode", "marker_rgb"))
     if tactile_mode == "encode":
+        if 'encoder_pretrained_mode' in options:
+            parts.append(options['encoder_pretrained_mode'])
         parts.extend([options.get("encoder_method", "ResNet"), options.get("encoder_size", "S"),
                       options.get("tactile_type", "cls"), options.get("tactile_insert_location", "decoder")])
     label = "_".join(parts)

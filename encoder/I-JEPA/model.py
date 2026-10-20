@@ -10,7 +10,7 @@ from .sigreg import SIGReg
 
 class IJEPAEncoder(TactileViT):
     def forward(self, images):
-        return self.patch_tokens(images).mean(dim=1)
+        return self.tokens(images)[:, 0]
 
 
 class IJEPA(nn.Module):

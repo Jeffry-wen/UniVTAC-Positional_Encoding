@@ -15,7 +15,7 @@ MODES = tuple(f'depth_deform_{n}' for n in (20, 80, 160, 240)) + (
 
 
 def train(mode, gpu, run_id, epochs, patience):
-    output = ROOT / 'encoder_results' / mode / 'VAE' / 'S' / run_id
+    output = ROOT / 'encoder_results' / mode / 'univtac' / 'VAE' / 'S' / run_id
     output.mkdir(parents=True, exist_ok=False)
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(gpu), PYTHON_BIN=sys.executable)
     command = ['bash', str(ROOT / 'train_encoder.sh'), '--method', 'VAE',

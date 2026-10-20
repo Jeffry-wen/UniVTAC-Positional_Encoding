@@ -22,7 +22,7 @@ class ReconstructionModel(nn.Module):
         return self.model.reconstruct(image)
 
 def result_dir():
-    return (Path(__file__).resolve().parents[2] / 'encoder_results' / 'marker_rgb' /
+    return (Path(__file__).resolve().parents[2] / 'encoder_results' / 'marker_rgb' / 'univtac' /
             'ResNet' / 'S' / timestr)
 
 def log(msg):
@@ -152,7 +152,7 @@ def main(args):
     train_data, valid_data = random_split(
         data, [train_size, valid_size], generator=generator)
     train_loader = DataLoader(
-        train_data, batch_size=batch_size, shuffle=True, num_workers=args.workers,
+        train_data, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=args.workers,
         persistent_workers=args.workers > 0, worker_init_fn=worker_init_fn, pin_memory=pin_memory,
     )
     valid_loader = DataLoader(
@@ -170,7 +170,7 @@ if __name__ == '__main__':
     parser.add_argument('data_num', type=int, nargs='?', default=1000)
     parser.add_argument('--data-root', type=Path, default=Path(__file__).resolve().parents[2] / 'resources/data/contact')
     parser.add_argument('--epochs', type=int, default=5)
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=64, choices=[64])
     parser.add_argument('--workers', type=int, default=0)
     parser.add_argument('--device', choices=['cpu', 'cuda'], default=None)
     parser.add_argument('--multi-gpu', action='store_true')
