@@ -20,7 +20,7 @@ sys.path.append(project_root)
 from util.misc import NestedTensor, is_main_process
 
 from .position_encoding import build_position_encoding
-from policy.vla_common.tactile_pooling import pool_act_tactile_outputs
+from policy.vla_common.tactile_pooling import pool_act_tactile_outputs, tactile_pool_size
 
 import IPython
 
@@ -327,7 +327,7 @@ def build_tactile_backbone(args):
     return_interm_layers = args.tactile_masks
     tactile_type = args.tactile_type if hasattr(args, 'tactile_type') else 'cls'
     # Pool mode uses the full backbone path, then pools features and positions.
-    if tactile_type == 'pool':
+    if tactile_pool_size(tactile_type) is not None:
         tactile_type = 'full'
     position_embedding = build_position_encoding(args)
     method = getattr(args, 'tactile_encoder_method', 'ResNet')
@@ -346,7 +346,7 @@ def build_tactile_backbone(args):
         backbone = CNNTactileBackbone(getattr(args, 'tactile_encoder_size', 'S'), args.tactile_ckpt,
                                       state, position_embedding, tactile_type,
                                       getattr(args, 'tactile_input_mode', 'marker_rgb'),
-                                      pooling3x3=getattr(args, 'tactile_type', 'cls') == 'pool')
+                                      pooling3x3=tactile_pool_size(getattr(args, 'tactile_type', 'cls')) is not None)
     else:
         backbone = ViTTactileBackbone(method, getattr(args, 'tactile_encoder_size', 'S'),
                                       args.tactile_ckpt, position_embedding, tactile_type,
@@ -355,7 +355,7 @@ def build_tactile_backbone(args):
 
 
 def configure_tactile_pooling(backbone, args, method, state):
-    backbone.pooling3x3 = getattr(args, 'tactile_type', 'cls') == 'pool'
+    backbone.pooling_size = tactile_pool_size(getattr(args, 'tactile_type', 'cls'))
     backbone.pooling_method = method
     backbone.pooling_pretrained_mode = (state or {}).get('pretrained_mode', 'univtac')
     return backbone

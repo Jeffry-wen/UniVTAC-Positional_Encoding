@@ -94,6 +94,50 @@ class PoolingTest(unittest.TestCase):
                 torch.testing.assert_close(pooled, model({'left': x, 'right': x}))
                 self.assertEqual(pooled.shape, (2, 6, 6))
 
+    def test_named_pool_sizes_values_alias_and_gradients(self):
+        x = torch.randn(2, 3, 3, 16, 16, requires_grad=True)
+        for method in ('MAE', 'DINOv2', 'I-JEPA', 'V-JEPA', 'VAE'):
+            model = adapter(method, mode='pool')
+            legacy = model({'left': x, 'right': x})
+            for mode, side in [('pool3x3', 3), ('pool5x5', 5), ('pool7x7', 7)]:
+                with self.subTest(method=method, mode=mode):
+                    model.mode = mode
+                    result = model({'left': x, 'right': x})
+                    self.assertEqual(result.shape, (2, 6 * (1 + side * side), 6))
+                    if side == 3:
+                        torch.testing.assert_close(result, legacy)
+                    single = x[:, 0]
+                    resized = F.interpolate(single, (224, 224), mode='bilinear', align_corners=False)
+                    patches = (model.backbone.latent_tokens(resized) if method == 'VAE'
+                               else model.backbone.patch_tokens(resized))
+                    grid = 7 if method == 'VAE' else 14
+                    expected = F.adaptive_avg_pool2d(
+                        patches.transpose(1, 2).reshape(2, 4, grid, grid), (side, side))
+                    actual = model._tokens(single)
+                    torch.testing.assert_close(actual[:, 1:], expected.flatten(2).transpose(1, 2))
+                    torch.testing.assert_close(actual[:, 0], model.backbone(resized))
+                    result.square().mean().backward(retain_graph=True)
+                    self.assertTrue(torch.isfinite(x.grad).all())
+
+    def test_external_named_pool_sizes_preserve_temporal_slices(self):
+        backbone = SimpleNamespace(hw=(320, 240), model=SimpleNamespace(patch_size=16))
+        model = adapter('V-JEPA')
+        model.pretrained_mode = 'vision'
+        model.backbone = FakeEncoder()
+        model.backbone.hw = backbone.hw
+        model.backbone.model = backbone.model
+        tokens = torch.randn(2, 600, 4, requires_grad=True)
+        with patch.object(model, '_unpooled_tokens', return_value=tokens):
+            for mode, side in [('pool', 3), ('pool3x3', 3), ('pool5x5', 5), ('pool7x7', 7)]:
+                model.mode = mode
+                actual = model._tokens(torch.empty(0))
+                expected = F.adaptive_avg_pool2d(
+                    tokens.reshape(4, 20, 15, 4).permute(0, 3, 1, 2), (side, side))
+                expected = expected.flatten(2).transpose(1, 2).reshape(2, 2 * side * side, 4)
+                torch.testing.assert_close(actual, expected)
+                actual.sum().backward(retain_graph=True)
+        self.assertTrue((tokens.grad > 0).all())
+
     def test_disabled_unchanged_and_strict_weights(self):
         model = adapter()
         x = torch.randn(2, 3, 16, 16)
@@ -231,7 +275,7 @@ class PoolingTest(unittest.TestCase):
         from policy.train_unified import make_config
         camera = 'observation.images.cam_high'
         for kind in ('pi05', 'starvla_groot', 'starvla_pi'):
-            for mode in ('cls', 'full', 'pool'):
+            for mode in ('cls', 'full', 'pool', 'pool3x3', 'pool5x5', 'pool7x7'):
                 with self.subTest(policy=kind, mode=mode):
                     args = SimpleNamespace(policy=kind, chunk_size=3, n_action_steps=2,
                         image_size=224, tactile_mode='encode', tactile_input_mode='rgb_only',
@@ -270,13 +314,14 @@ class PoolingTest(unittest.TestCase):
         with patch('vit_encoder.TactileViT', FakeEncoder):
             full = build_tactile_backbone(args)
             expected = full(x)
-            args.tactile_type = 'pool'
-            pooled = build_tactile_backbone(args)
-            pooled.load_state_dict(full.state_dict(), strict=True)
-            feature, position = pooled(x)
-            self.assertEqual(feature[0].shape, (2, 4, 1, 10))
-            self.assertEqual(position[0].shape, (2, 512, 1, 10))
-            torch.testing.assert_close(feature[0][..., 0], expected[0][0][..., 0])
+            for mode, side in [('pool', 3), ('pool3x3', 3), ('pool5x5', 5), ('pool7x7', 7)]:
+                args.tactile_type = mode
+                pooled = build_tactile_backbone(args)
+                pooled.load_state_dict(full.state_dict(), strict=True)
+                feature, position = pooled(x)
+                self.assertEqual(feature[0].shape, (2, 4, 1, 1 + side * side))
+                self.assertEqual(position[0].shape, (2, 512, 1, 1 + side * side))
+                torch.testing.assert_close(feature[0][..., 0], expected[0][0][..., 0])
             args.tactile_type = 'cls'
             cls = build_tactile_backbone(args)
             self.assertEqual(cls(x)[0][0].shape, (2, 4, 1, 1))

@@ -9,6 +9,8 @@ from pathlib import Path
 import torch
 from torch import nn
 
+from .tactile_pooling import tactile_pool_size
+
 
 class TactileEncoder(nn.Module):
     def __init__(self, config, output_dim: int):
@@ -79,19 +81,21 @@ class TactileEncoder(nn.Module):
             config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
-        if self.mode == "pool" and self.pretrained_mode == 'univtac':
+        pool_size = tactile_pool_size(self.mode)
+        if pool_size is not None and self.pretrained_mode == 'univtac':
             from .tactile_pooling import univtac_pool_tokens
             from torch.nn import functional as F
             if x.ndim == 4:
                 x = F.interpolate(x, size=(self.image_size, self.image_size),
                                   mode='bilinear', align_corners=False)
-            return univtac_pool_tokens(self.backbone, self.method, x)
+            return univtac_pool_tokens(self.backbone, self.method, x, pool_size)
         tokens = self._unpooled_tokens(x)
-        if self.mode == "pool":
+        if pool_size is not None:
             from .tactile_pooling import pool_tactile_tokens
             tokens = pool_tactile_tokens(
                 tokens, self.backbone, self.method, self.pretrained_mode,
-                includes_cls=self.pretrained_mode == 'univtac' and self.method in {'MAE', 'DINOv2'})
+                includes_cls=self.pretrained_mode == 'univtac' and self.method in {'MAE', 'DINOv2'},
+                pool_size=pool_size)
         return tokens
 
     def _unpooled_tokens(self, x: torch.Tensor) -> torch.Tensor:

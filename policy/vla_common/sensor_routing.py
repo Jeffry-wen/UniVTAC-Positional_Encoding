@@ -88,7 +88,7 @@ class SensorRoutingMixin:
     # --- tactile routing ---
     tactile_mode: str = "none"  # none | as_image | encode
     tactile_input_mode: str = "marker_rgb"  # UniVTAC tactile representation
-    tactile_type: str = "cls"  # cls | full | pool, for tactile_mode=encode
+    tactile_type: str = "cls"  # cls | full | pool (=pool3x3) | pool3x3 | pool5x5 | pool7x7, for tactile_mode=encode
     tactile_encoder_pretrained_mode: str = "univtac"  # univtac | tactile | vision
     tactile_encoder_type: str | None = None  # None | anytouch2 | native (encode only)
     tactile_keys: list[str] = field(

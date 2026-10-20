@@ -41,7 +41,7 @@ esac
 
 TACTILE_MODE="${TACTILE_MODE:-encode}"     # none | as_image | encode | native (N0)
 TACTILE_INPUT_MODE="${TACTILE_INPUT_MODE:-${INPUT_MODE:-marker_rgb}}" # marker_only | rgb_only | marker_rgb | depth_deform_20 | depth_deform_80 | depth_deform_160 | depth_deform_240 | depth_deform_nonlinear | depth_deform_nonlinear_radial
-TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full | pool (encode only)
+TACTILE_TYPE="${TACTILE_TYPE:-full}"        # cls | full | pool3x3 | pool5x5 | pool7x7 (pool aliases pool3x3; encode only)
 TACTILE_INSERT_LOCATION="${TACTILE_INSERT_LOCATION:-encoder}"
 ENCODER_PRETRAINED_MODE="${ENCODER_PRETRAINED_MODE:-univtac}" # univtac | tactile | vision
 ENCODER_METHOD="${ENCODER_METHOD:-VAE}"

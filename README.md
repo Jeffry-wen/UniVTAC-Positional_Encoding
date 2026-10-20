@@ -89,7 +89,7 @@ CUDA_VISIBLE_DEVICES=0 bash train_encoder.sh \
 - 模型（`POLICY`）：`act`（ACT）、`pi05`（PI0.5）、`starvla_groot`（StarVLA-GR00T）、`starvla_pi`（StarVLA-PI，逐层 flow-matching 动作头）。
 - 触觉模式（`TACTILE_MODE`）：`none / as_image / encode`。
 - 表示方式（`TACTILE_INPUT_MODE`）：`marker_only / rgb_only / marker_rgb / depth_deform`，与 Encoder 相同。
-- `encode` 模式：`ENCODER_METHOD` 和 `ENCODER_SIZE` 与上述 Encoder 选项相同；`TACTILE_TYPE=cls / full` 分别使用全局特征或完整 token 序列，`TACTILE_INSERT_LOCATION=encoder / decoder` 指定插入位置。
+- `encode` 模式：`ENCODER_METHOD` 和 `ENCODER_SIZE` 与上述 Encoder 选项相同；`TACTILE_TYPE=cls / full` 分别使用全局特征或完整 token 序列；`TACTILE_TYPE=pool3x3 / pool5x5 / pool7x7` 将空间特征自适应平均池化到对应网格，UniVTAC 编码器另保留 1 个全局 token（每张图共 10 / 26 / 50 个 token），旧值 `pool` 等价于 `pool3x3`；`TACTILE_INSERT_LOCATION=encoder / decoder` 指定插入位置。
 
 全部任务、全部 episode、双相机、两卡训练：
 

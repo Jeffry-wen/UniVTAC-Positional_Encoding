@@ -6,8 +6,16 @@ import torch
 from torch.nn import functional as F
 
 
-def pool_spatial_tokens(tokens, grid_size, prefix_tokens=0):
-    """Pool each temporal slice to 3x3, preserving any leading CLS tokens."""
+POOL_SIZES = {'pool': 3, 'pool3x3': 3, 'pool5x5': 5, 'pool7x7': 7}
+
+
+def tactile_pool_size(mode):
+    """Return the requested spatial side length; legacy pool means pool3x3."""
+    return POOL_SIZES.get(mode)
+
+
+def pool_spatial_tokens(tokens, grid_size, prefix_tokens=0, pool_size=3):
+    """Pool each temporal slice to pool_size x pool_size, preserving any leading CLS tokens."""
     height, width = grid_size
     batch, count, channels = tokens.shape
     patches = tokens[:, prefix_tokens:]
@@ -15,8 +23,8 @@ def pool_spatial_tokens(tokens, grid_size, prefix_tokens=0):
         raise ValueError(f'Cannot reshape {count} tokens into {grid_size} spatial grids')
     frames = patches.shape[1] // (height * width)
     grid = patches.reshape(batch * frames, height, width, channels).permute(0, 3, 1, 2)
-    pooled = F.adaptive_avg_pool2d(grid, (3, 3)).flatten(2).transpose(1, 2)
-    pooled = pooled.reshape(batch, frames * 9, channels)
+    pooled = F.adaptive_avg_pool2d(grid, (pool_size, pool_size)).flatten(2).transpose(1, 2)
+    pooled = pooled.reshape(batch, frames * pool_size * pool_size, channels)
     return torch.cat((tokens[:, :prefix_tokens], pooled), dim=1) if prefix_tokens else pooled
 
 
@@ -37,30 +45,30 @@ def tactile_token_grid(backbone, method, pretrained_mode, token_count):
     return backbone.hw[0] // ph, backbone.hw[1] // pw
 
 
-def pool_tactile_tokens(tokens, backbone, method, pretrained_mode, *, includes_cls=False):
+def pool_tactile_tokens(tokens, backbone, method, pretrained_mode, *, includes_cls=False, pool_size=3):
     prefix = int(includes_cls)
     grid = tactile_token_grid(backbone, method, pretrained_mode, tokens.shape[1] - prefix)
-    return pool_spatial_tokens(tokens, grid, prefix)
+    return pool_spatial_tokens(tokens, grid, prefix, pool_size)
 
 
-def univtac_pool_tokens(backbone, method, images):
-    """Return the cls-mode feature followed by nine spatial tokens in one pass."""
+def univtac_pool_tokens(backbone, method, images, pool_size=3):
+    """Return the cls-mode feature followed by pooled spatial tokens in one pass."""
     if method == 'ResNet':
         net = backbone.backbone
         grid = net.maxpool(net.relu(net.bn1(net.conv1(images))))
         grid = net.layer4(net.layer3(net.layer2(net.layer1(grid))))
         cls = net.fc(net.avgpool(grid).flatten(1))[:, None]
-        patches = F.adaptive_avg_pool2d(grid, (3, 3)).flatten(2).transpose(1, 2)
+        patches = F.adaptive_avg_pool2d(grid, (pool_size, pool_size)).flatten(2).transpose(1, 2)
         # ResNet-B has 2048 spatial channels but a 512-D global feature.
-        # Reuse its pretrained FC to put all ten tokens in the same space.
+        # Reuse its pretrained FC to put all tokens in the same space.
         patches = net.fc(patches)
     elif method == 'VAE':
         cls, patches = backbone.cls_and_latent_tokens(images)
-        patches = pool_spatial_tokens(patches, (7, 7))
+        patches = pool_spatial_tokens(patches, (7, 7), pool_size=pool_size)
     else:
         tokens = backbone.tokens(images)
         cls = tokens[:, :1]
-        patches = pool_spatial_tokens(tokens[:, 1:], (backbone.grid_size, backbone.grid_size))
+        patches = pool_spatial_tokens(tokens[:, 1:], (backbone.grid_size, backbone.grid_size), pool_size=pool_size)
     return torch.cat((cls, patches), dim=1)
 
 
@@ -68,12 +76,13 @@ def pool_act_tactile_outputs(forward):
     """Pool ACT features and their positions without wrapping registered modules."""
     @wraps(forward)
     def pooled_forward(self, *args, **kwargs):
-        pooling = getattr(self, 'pooling3x3', False) and self.tactile_type == 'full'
+        pool_size = getattr(self, 'pooling_size', 3 if getattr(self, 'pooling3x3', False) else None)
+        pooling = pool_size is not None and self.tactile_type == 'full'
         if (pooling and self.pooling_pretrained_mode == 'univtac'
                 and hasattr(self.backbone, 'embed_dim')):
-            tokens = univtac_pool_tokens(self.backbone, self.pooling_method, args[0])
+            tokens = univtac_pool_tokens(self.backbone, self.pooling_method, args[0], pool_size)
             feature = tokens.transpose(1, 2).unsqueeze(2)
-            spatial = tokens[:, 1:].transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], 3, 3)
+            spatial = tokens[:, 1:].transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], pool_size, pool_size)
             position = self.position_embedding(spatial).flatten(2).unsqueeze(2)
             position = position.expand(tokens.shape[0], -1, -1, -1)
             if hasattr(self, 'cls_position'):
@@ -88,15 +97,15 @@ def pool_act_tactile_outputs(forward):
         pooled_features, pooled_positions = [], []
         for feature, position in zip(features, positions):
             if feature.shape[-2] > 1:
-                feature = F.adaptive_avg_pool2d(feature, (3, 3))
-                position = F.adaptive_avg_pool2d(position, (3, 3))
+                feature = F.adaptive_avg_pool2d(feature, (pool_size, pool_size))
+                position = F.adaptive_avg_pool2d(position, (pool_size, pool_size))
             else:
                 includes_cls = (self.pooling_pretrained_mode == 'univtac'
                                 and self.pooling_method in ('MAE', 'DINOv2'))
                 def pool(value):
                     tokens = value.squeeze(2).transpose(1, 2)
                     tokens = pool_tactile_tokens(tokens, self.backbone, self.pooling_method,
-                                                 self.pooling_pretrained_mode, includes_cls=includes_cls)
+                                                 self.pooling_pretrained_mode, includes_cls=includes_cls, pool_size=pool_size)
                     return tokens.transpose(1, 2).unsqueeze(2)
                 feature, position = pool(feature), pool(position)
             pooled_features.append(feature)

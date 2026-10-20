@@ -689,8 +689,8 @@ def main():
                    help="absolute[_joint] or relative[_joint]; relative arm targets use the current observation; gripper stays absolute")
     p.add_argument("--tactile-mode", choices=["none", "as_image", "encode", "native"], default="none")
     p.add_argument("--tactile-input-mode", choices=list(INPUT_CHANNELS), default="marker_rgb")
-    p.add_argument("--tactile-type", choices=["cls", "full", "pool"], default="cls",
-                   help="cls: global token; full: all tokens; pool: adaptive 3x3 spatial tokens")
+    p.add_argument("--tactile-type", choices=["cls", "full", "pool", "pool3x3", "pool5x5", "pool7x7"], default="cls",
+                   help="cls: global token; full: all tokens; pool3x3/pool5x5/pool7x7: adaptive spatial pooling; pool aliases pool3x3")
     p.add_argument("--tactile-insert-location", choices=["encoder", "decoder"], default="decoder")
     p.add_argument("--encoder-ckpt", type=Path)
     p.add_argument("--encoder-method", default="ResNet")
