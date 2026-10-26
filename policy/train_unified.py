@@ -395,12 +395,13 @@ def run(args):
     if args.tactile_mode == 'encode':
         from encoder.pretrained_registry import validate_identity
         validate_identity(args.encoder_pretrained_mode, args.encoder_method, args.encoder_size)
-        if not args.encoder_ckpt and args.encoder_pretrained_mode == 'tactile':
+        if not args.encoder_ckpt and (args.encoder_pretrained_mode == 'tactile' or
+                                     (args.encoder_pretrained_mode == 'vision' and args.encoder_method == 'Wan2.2-VAE')):
             # Export once on rank zero. No download or random fallback during policy restore.
             paths = [None]
             if args.rank == 0:
                 from encoder.external import initial_metadata
-                paths[0] = str(initial_metadata('tactile', args.encoder_method, args.encoder_size, args.tactile_input_mode))
+                paths[0] = str(initial_metadata(args.encoder_pretrained_mode, args.encoder_method, args.encoder_size, args.tactile_input_mode))
             if args.world_size > 1:
                 dist.broadcast_object_list(paths, src=0)
             args.encoder_ckpt = Path(paths[0])

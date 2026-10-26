@@ -82,6 +82,8 @@ class TactileEncoder(nn.Module):
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
         pool_size = tactile_pool_size(self.mode)
+        if pool_size is not None and self.pretrained_mode == 'tactile':
+            return self.backbone.pooled_tokens(x, pool_size)
         if pool_size is not None and self.pretrained_mode == 'univtac':
             from .tactile_pooling import univtac_pool_tokens
             from torch.nn import functional as F

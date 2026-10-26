@@ -78,6 +78,10 @@ def pool_act_tactile_outputs(forward):
     def pooled_forward(self, *args, **kwargs):
         pool_size = getattr(self, 'pooling_size', 3 if getattr(self, 'pooling3x3', False) else None)
         pooling = pool_size is not None and self.tactile_type == 'full'
+        if pooling and self.pooling_pretrained_mode == 'tactile':
+            tokens = self.backbone.pooled_tokens(args[0], pool_size)
+            feature = tokens.transpose(1, 2).unsqueeze(2)
+            return [feature], [self.position_embedding(feature).to(feature.dtype)]
         if (pooling and self.pooling_pretrained_mode == 'univtac'
                 and hasattr(self.backbone, 'embed_dim')):
             tokens = univtac_pool_tokens(self.backbone, self.pooling_method, args[0], pool_size)

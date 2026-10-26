@@ -71,7 +71,9 @@ class ExternalEncoder(nn.Module):
             sys.path.insert(0, str(ROOT / 'resources/third_party/sparsh'))
             module = importlib.import_module('tactile_ssl.model.vision_transformer')
             self.embed_dim = 384 if size == 'S' else 768
-            self.hw = (320, 240)
+            # New exports use square inputs; restore the resolution saved by older policies.
+            image_size = (metadata or {}).get('image_size', (224, 224))
+            self.hw = (image_size, image_size) if isinstance(image_size, int) else tuple(image_size)
             self.model = module.VisionTransformer(img_size=self.hw, in_chans=3 if method == 'V-JEPA' else 12,
                 embed_dim=self.embed_dim, depth=12, num_heads=6 if size == 'S' else 12,
                 pos_embed_fn='sinusoidal', num_register_tokens=0 if method == 'MAE' else 1,
@@ -206,6 +208,27 @@ class ExternalEncoder(nn.Module):
         if self.method == 'DINOv3':
             output = output[:, 1 + getattr(self.model.config, 'num_register_tokens', 0):]
         return output
+
+    def pooled_tokens(self, x, pool_size=3):
+        """Keep global prefix tokens and pool only spatial grids within each time slice."""
+        from policy.vla_common.tactile_pooling import pool_spatial_tokens, tactile_token_grid
+        prefix = 0
+        if self.method == 'AnyTouch2':
+            output = self.model(self.preprocess(x))
+            # Preserve CLS; sensor conditioning tokens stay internal to the backbone.
+            tokens = torch.cat((output[:, :1], output[:, 6:]), dim=1)
+            prefix = 1
+        elif self.mode == 'tactile':
+            images = self.preprocess(x).flip(1)
+            images = images.transpose(1, 2) if self.method == 'V-JEPA' else images.flatten(1, 2)
+            output = self.model.forward_features(images)
+            registers = output['x_norm_regtokens']
+            prefix = registers.shape[1]
+            tokens = torch.cat((registers, output['x_norm_patchtokens']), dim=1)
+        else:
+            tokens = self.patch_tokens(x)
+        grid = tactile_token_grid(self, self.method, self.mode, tokens.shape[1] - prefix)
+        return pool_spatial_tokens(tokens, grid, prefix_tokens=prefix, pool_size=pool_size)
 
     def forward(self, x):
         return self.patch_tokens(x).mean(1)

@@ -7,6 +7,14 @@ frames at stride two; Wan2.2-VAE uses five chronological frames at stride two an
 outputs 98×192 patchified features per sensor. See [encoder sources and examples](../encoder/PRETRAINED.md)
 for downloads, checkpoint migration, supported sizes and shared adaptation parameters.
 
+Set `ENCODER_INIT=official` with `ENCODER_PRETRAINED_MODE=tactile` or
+`ENCODER_PRETRAINED_MODE=vision ENCODER_METHOD=Wan2.2-VAE`, and no `ENCODER_CKPT`,
+to initialize downstream policy training directly from the official weights,
+skipping discovery of existing encoder runs. Rank zero only
+converts the weights into the policy checkpoint format; it performs no separate
+encoder optimization. New Sparsh initializers use 224×224 inputs. The default
+`ENCODER_INIT=latest` retains automatic selection of the latest exported encoder.
+
 `train_policy.sh` trains ACT, PI0.5, StarVLA-GR00T, or N0-VTLA from the same raw Isaac 5.1 HDF5 files. All training code and model assets are local to this repository. The state is `embodiment/joint[t, :8]`; the action chunk begins with `embodiment/joint[t+1, :8]`. Those eight values are seven arm joints and one gripper value. The ninth raw joint column is excluded, matching ACT.
 
 ## Setup

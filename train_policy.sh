@@ -32,7 +32,7 @@ TASK="${TASK:-}"                   # single_task only
 TASKS="${TASKS:-}"                         # multi_task comma-separated; empty = all
 EPISODES="${EPISODES:-0}"                 # per task; 0 = all
 CAMERAS="${CAMERAS:-all}"                  # auto | head | all
-ACTION_MODE="${ACTION_MODE:-absolute_joint}" # absolute[_joint] | relative[_joint]; gripper stays absolute
+ACTION_MODE="${ACTION_MODE:-relative_joint}" # absolute[_joint] | relative[_joint]; gripper stays absolute
 case "$ACTION_MODE" in
   absolute|absolute_joint) ACTION_MODE=absolute_joint ;;
   relative|relative_joint) ACTION_MODE=relative_joint ;;
@@ -47,6 +47,18 @@ ENCODER_PRETRAINED_MODE="${ENCODER_PRETRAINED_MODE:-univtac}" # univtac | tactil
 ENCODER_METHOD="${ENCODER_METHOD:-VAE}"
 ENCODER_SIZE="${ENCODER_SIZE:-}"
 ENCODER_CKPT="${ENCODER_CKPT:-}"
+ENCODER_INIT="${ENCODER_INIT:-latest}" # latest | official (tactile or Wan2.2-VAE initializer, no encoder training)
+case "$ENCODER_INIT" in
+  latest) ;;
+  official)
+    if [[ "$TACTILE_MODE" != encode || -n "$ENCODER_CKPT" ]] || \
+       [[ "$ENCODER_PRETRAINED_MODE" != tactile && ! ( "$ENCODER_PRETRAINED_MODE" == vision && "$ENCODER_METHOD" == Wan2.2-VAE ) ]]; then
+      echo "ENCODER_INIT=official requires tactile or vision/Wan2.2-VAE encode mode and no ENCODER_CKPT" >&2
+      exit 2
+    fi
+    ;;
+  *) echo "Unknown ENCODER_INIT: $ENCODER_INIT" >&2; exit 2 ;;
+esac
 
 STEPS="${STEPS:-5_0000}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
@@ -86,7 +98,7 @@ fi
 if [[ -z "$ENCODER_SIZE" ]]; then
   ENCODER_SIZE="$("$PYTHON_BIN" -c 'import sys; from encoder.pretrained_registry import default_size; print(default_size(*sys.argv[1:]))' "$ENCODER_PRETRAINED_MODE" "$ENCODER_METHOD")"
 fi
-if [[ "$TACTILE_MODE" == encode && -z "$ENCODER_CKPT" ]]; then
+if [[ "$TACTILE_MODE" == encode && -z "$ENCODER_CKPT" && "$ENCODER_INIT" != official ]]; then
   ENCODER_CKPT="$(find "$ROOT/encoder_results/$TACTILE_INPUT_MODE/$ENCODER_PRETRAINED_MODE/$ENCODER_METHOD/$ENCODER_SIZE" -name encoder.pth -type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
   if [[ -z "$ENCODER_CKPT" && "$ENCODER_PRETRAINED_MODE" != tactile ]]; then
     echo "No encoder checkpoint found; set ENCODER_CKPT or run train_encoder.sh" >&2
@@ -102,6 +114,7 @@ if [[ "$TACTILE_MODE" != none ]]; then RUN_LABEL+="_${TACTILE_INPUT_MODE}"; fi
 if [[ "$TACTILE_MODE" == encode ]]; then
   RUN_LABEL+="_${ENCODER_PRETRAINED_MODE}_${ENCODER_METHOD}_${ENCODER_SIZE}_${TACTILE_TYPE}_${TACTILE_INSERT_LOCATION}"
 fi
+if [[ -n "${RUN_TAG:-}" ]]; then RUN_LABEL+="_${RUN_TAG}"; fi
 RUN_NAME="$(date +%Y%m%d-%H%M%S-%N)_${RUN_LABEL}"
 OUTPUT_DIR="${OUTPUT_DIR:-$OUTPUT_ROOT/$RUN_NAME}"
 mkdir -p "$(dirname "$OUTPUT_DIR")"

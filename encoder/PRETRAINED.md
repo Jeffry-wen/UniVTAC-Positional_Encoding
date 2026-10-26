@@ -142,7 +142,18 @@ RGB inputs to tactile-pretrained models subtract the episode's first tactile ima
 add `.5` for Sparsh or `130/255` for AnyTouch2, and clamp to `[0,1]`.
 Background subtraction stays in float space after the shared image resizing.
 Sparsh rotates UniVTAC's landscape sensor raster clockwise into its upstream
-portrait convention before resizing to 320×240.
+portrait convention before resizing to **224×224** for new encoder exports and
+policy training/inference. MAE, DINOv2 and I-JEPA return 196 patch tokens per
+sensor; four-frame V-JEPA returns 392 (two temporal slices of 14×14).
+The encoder checkpoint records `image_size`; restoring an existing 320×240
+checkpoint retains that resolution and its original 300/600-token contract.
+Re-export the tactile initializer to use 224×224 for a new policy run.
+Policy spatial pooling (`pool`/`pool3x3`, `pool5x5`, `pool7x7`) retains AnyTouch2's
+CLS token and excludes its five sensor tokens. Sparsh has no separate CLS token;
+its single register token is retained for DINOv2, I-JEPA and V-JEPA, while MAE
+has no prefix token. Only spatial patches are pooled, separately for each latent
+time slice. At `pool3x3`, per-sensor token counts are MAE 9, DINOv2/I-JEPA 10,
+and V-JEPA/AnyTouch2 19. `full` and `cls` output contracts are unchanged.
 Depth/deform and marker-only representations
 are already encoded signals and do not receive RGB background subtraction.
 AnyTouch2 uses its official CLIP normalization, Sparsh uses `[0,1]`, DINOv3 and
