@@ -14,7 +14,7 @@ else:
     from radial_nonlinear_depth_deform import convert_nonlinear_radial
 
 
-INPUT_CHANNELS = {'marker_only': 3, 'rgb_only': 3, 'marker_rgb': 3,
+INPUT_CHANNELS = {'marker_only': 3, 'rgb_only': 3, 'marker_rgb': 3, 'depth_deform_raw': 5,
                   **{mode: 3 for mode in DEPTH_DEFORM_SPECS}}
 
 
@@ -22,6 +22,12 @@ def tactile_from_arrays(data, mode, image_size=224):
     """Encode raw RGB/depth/marker arrays identically for training and deployment."""
     if mode not in INPUT_CHANNELS:
         raise ValueError(f'Unknown tactile input mode: {mode}')
+    if mode == 'depth_deform_raw':
+        if __package__:
+            from .DINO_TactileRoPE.data import raw_fields
+        else:
+            from DINO_TactileRoPE.data import raw_fields
+        return raw_fields(data['depth'], data.get('marker_full', data.get('marker')), image_size)
     if mode in ('rgb_only', 'marker_rgb'):
         key = 'rgb' if mode == 'rgb_only' else 'rgb_marker'
         image = np.asarray(data[key])
@@ -58,7 +64,7 @@ def read_tactile(h5, side, step, mode, image_size=224):
         data = {key: read_rgb(h5[f'{prefix}/{key}'], step)}
     elif mode == 'marker_only':
         data = {'marker': h5[f'{prefix}/marker'][step]}
-    elif mode in DEPTH_DEFORM_SPECS:
+    elif mode in DEPTH_DEFORM_SPECS or mode == 'depth_deform_raw':
         data = {'depth': h5[f'{prefix}/depth'][step], 'marker': h5[f'{prefix}/marker'][step]}
         for key in ('press_depth', 'marker_full'):
             if f'{prefix}/{key}' in h5:

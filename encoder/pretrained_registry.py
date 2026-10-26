@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPARSH_REVISION = 'fee6a05a97330eca014b59c71ac41596fe3974a7'
 MODES = ('univtac', 'tactile', 'vision')
 METHODS = {
-    'univtac': ('ResNet', 'VAE', 'MAE', 'DINOv2', 'I-JEPA', 'V-JEPA'),
+    'univtac': ('ResNet', 'VAE', 'MAE', 'DINOv2', 'DINO_TactileRoPE', 'DINO_TactileRoPE_V2', 'I-JEPA', 'V-JEPA'),
     'tactile': ('MAE', 'DINOv2', 'I-JEPA', 'V-JEPA', 'AnyTouch2'),
     'vision': ('DINOv3', 'SigLIP2', 'V-JEPA2', 'Wan2.2-VAE'),
 }

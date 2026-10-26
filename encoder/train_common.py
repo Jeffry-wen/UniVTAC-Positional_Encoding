@@ -41,7 +41,7 @@ class TactileFrames(Dataset):
             cached = lengths.get(str(path)) if lengths else None
             with h5py.File(path, 'r') if cached is None else nullcontext() as h5:
                 for side in ('left', 'right'):
-                    kind = ('depth' if input_mode in DEPTH_DEFORM_SPECS else 'marker' if input_mode == 'marker_only'
+                    kind = ('depth' if (input_mode in DEPTH_DEFORM_SPECS or input_mode == 'depth_deform_raw') else 'marker' if input_mode == 'marker_only'
                             else 'rgb' if input_mode == 'rgb_only' else 'rgb_marker')
                     key = f'tactile/{side}_tactile/{kind}'
                     if cached is not None:
@@ -72,7 +72,7 @@ class TactileFrames(Dataset):
         if path not in self.handles:
             self.handles[path] = h5py.File(path, 'r')
         h5 = self.handles[path]
-        if self.input_mode in DEPTH_DEFORM_SPECS:
+        if self.input_mode in DEPTH_DEFORM_SPECS or self.input_mode == 'depth_deform_raw':
             key = (path, side)
             if key not in self.mapped_arrays:
                 prefix = f'tactile/{side}_tactile'
@@ -195,6 +195,8 @@ def knn_accuracy(encoder, train_probe, train_labels, val_probe, val_labels,
 
 
 def run(args):
+    if (args.method in ('DINO_TactileRoPE', 'DINO_TactileRoPE_V2')) != (args.input_mode == 'depth_deform_raw'):
+        raise ValueError('DINO_TactileRoPE must use depth_deform_raw; other methods do not accept it')
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -258,7 +260,12 @@ def run(args):
     model = METHODS[args.method](args.size, INPUT_CHANNELS[args.input_mode],
                                  **args.model_options).to(device)
     if args.multi_gpu and device.type == 'cuda' and torch.cuda.device_count() > 1:
-        model = nn.DataParallel(model)
+        if hasattr(model, 'enable_token_parallel'):
+            if device.index not in (None, 0):
+                raise ValueError('Token parallel requires device=cuda or cuda:0; select GPUs with CUDA_VISIBLE_DEVICES')
+            model.enable_token_parallel()
+        else:
+            model = nn.DataParallel(model)
     optimizer_class = {'Adam': torch.optim.Adam, 'AdamW': torch.optim.AdamW}[args.optimizer]
     optimizer = optimizer_class((p for p in model.parameters() if p.requires_grad),
                                 lr=args.lr, weight_decay=args.weight_decay)
@@ -270,6 +277,8 @@ def run(args):
     stale_epochs = 0
     if args.resume:
         saved = torch.load(args.resume, map_location='cpu', weights_only=False)
+        if args.method in ('DINO_TactileRoPE', 'DINO_TactileRoPE_V2') and saved.get('model_config') != args.model_options:
+            raise ValueError('Resume requires identical DINO触觉RoPE model/calibration configuration')
         if args.input_mode in ('rgb_only', 'marker_rgb'):
             require_rgb_model(saved)
         for key, expected in (('method', args.method), ('size', args.size),
@@ -285,7 +294,9 @@ def run(args):
         best_val_loss = saved.get('best_val_loss', float('inf'))
         best_probe_accuracy = saved.get('best_probe_accuracy', -1.0)
         stale_epochs = saved.get('stale_epochs', 0)
-    family = 'resnet' if args.method == 'ResNet' else 'vit'
+    family = 'tactile_rope_v1' if args.method in ('DINO_TactileRoPE', 'DINO_TactileRoPE_V2') else ('resnet' if args.method == 'ResNet' else 'vit')
+    if args.method == 'DINO_TactileRoPE_V2':
+        family = 'tactile_rope_v2'
     out = args.output_dir or (args.resume.parent if args.resume else None) or (result_root(args.input_mode, 'univtac', args.method, args.size) /
                               datetime.now().strftime('%Y%m%d-%H%M%S-%f'))
     out.mkdir(parents=True, exist_ok=True)
@@ -433,7 +444,7 @@ def run(args):
         if not args.no_save:
             checkpoint = {'format_version': 3, 'color_order': 'RGB', 'method': args.method, 'size': args.size,
                           'pretrained_mode': 'univtac', 'num_frames': 1, 'frame_stride': 1,
-                          'architecture': family,
+                          'architecture': family, 'model_config': args.model_options,
                           'image_size': 224, 'input_mode': args.input_mode,
                           'in_chans': INPUT_CHANNELS[args.input_mode],
                           'depth_deform_encoding': depth_deform_spec(args.input_mode) if args.input_mode in DEPTH_DEFORM_SPECS else None,
@@ -449,7 +460,7 @@ def run(args):
                 if args.method == 'VAE':
                     # Keep the matching encoder/decoder for best-epoch reconstruction.
                     save_checkpoint(checkpoint, out / 'best.pth')
-                save_checkpoint({key: checkpoint[key] for key in ('format_version', 'pretrained_mode', 'num_frames', 'frame_stride', 'method', 'size', 'architecture',
+                save_checkpoint({key: checkpoint[key] for key in ('format_version', 'pretrained_mode', 'num_frames', 'frame_stride', 'method', 'size', 'architecture', 'model_config',
                             'image_size', 'input_mode', 'in_chans', 'color_order', 'depth_deform_encoding', 'encoder', 'epoch', 'step',
                             'val_loss', 'best_val_loss', 'knn_accuracy',
                             'best_probe_accuracy')}, out / 'encoder.pth')

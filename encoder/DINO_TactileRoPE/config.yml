@@ -1,0 +1,79 @@
+# DINO触觉RoPE. Uncalibrated: x/y/u/v in pixels, h in mm. No auxiliary loss.
+S:
+  samples: 100000
+  epochs: 30
+  batch_size: 64
+  workers: 6
+  optimizer: AdamW
+  precision: bf16
+  lr: 0.0001
+  weight_decay: 0.04
+  warmup_epochs: 1
+  min_lr_ratio: 0.1
+  grad_clip: 1.0
+  teacher_momentum: 0.996
+  val_fraction: 0.2
+  early_stop_patience: 5
+  checkpoint_metric: knn
+  probe_per_class_train: 128
+  probe_per_class_val: 128
+  multi_gpu: false
+  model:
+    student_temperature: 0.1
+    teacher_temperature: 0.005
+    mask_ratio: 0.5
+    patch_weight: 1.0
+    koleo_weight: 0.1
+    head_koleo_weight: 1.0
+    centering: sinkhorn
+    rope:
+      reference_depth_mm: 30.0
+      mm_per_pixel: null
+      spatial_scales:
+      - 160.0
+      - 120.0
+      deformation_scales:
+      - 20.0
+      - 20.0
+      - 5.0
+      min_frequency: 0.01
+      max_frequency: 1.0
+B:
+  samples: 100000
+  epochs: 30
+  batch_size: 64
+  workers: 6
+  optimizer: AdamW
+  precision: bf16
+  lr: 5.0e-05
+  weight_decay: 0.04
+  warmup_epochs: 1
+  min_lr_ratio: 0.1
+  grad_clip: 1.0
+  teacher_momentum: 0.996
+  val_fraction: 0.2
+  early_stop_patience: 5
+  checkpoint_metric: knn
+  probe_per_class_train: 128
+  probe_per_class_val: 128
+  multi_gpu: false
+  model:
+    student_temperature: 0.1
+    teacher_temperature: 0.005
+    mask_ratio: 0.5
+    patch_weight: 1.0
+    koleo_weight: 0.1
+    head_koleo_weight: 1.0
+    centering: sinkhorn
+    rope:
+      reference_depth_mm: 30.0
+      mm_per_pixel: null
+      spatial_scales:
+      - 160.0
+      - 120.0
+      deformation_scales:
+      - 20.0
+      - 20.0
+      - 5.0
+      min_frequency: 0.01
+      max_frequency: 1.0

@@ -51,9 +51,9 @@ class DINOv2(nn.Module):
     def __init__(self, size, in_chans=3, student_temperature=.1,
                  teacher_temperature=.02, mask_ratio=.5, patch_weight=1.,
                  koleo_weight=.1, head_koleo_weight=.1, centering='ema',
-                 num_prototypes=1024):
+                 num_prototypes=1024, encoder=None):
         super().__init__()
-        self.encoder = TactileViT(size, in_chans=in_chans)
+        self.encoder = encoder if encoder is not None else TactileViT(size, in_chans=in_chans)
         dim = self.encoder.embed_dim
         self.cls_head = DINOHead(dim, num_prototypes)
         self.patch_head = DINOHead(dim, num_prototypes)
@@ -77,20 +77,26 @@ class DINOv2(nn.Module):
         self.register_buffer('cls_center', torch.zeros(1, num_prototypes))
         self.register_buffer('patch_center', torch.zeros(1, 1, num_prototypes))
 
+    def encode_tokens(self, encoder, view, **kwargs):
+        return encoder.tokens(view, **kwargs)
+
+    def make_views(self, images):
+        return [augment(images), augment(images), augment(images, local=True)]
+
     def forward(self, images):
-        views = [augment(images), augment(images), augment(images, local=True)]
+        views = self.make_views(images)
         masks = [torch.rand(images.shape[0], 196, device=images.device) < self.mask_ratio
                  for _ in range(2)]
-        globals_student = [self.encoder.tokens(view, patch_mask=mask, mask_token=self.mask_token)
+        globals_student = [self.encode_tokens(self.encoder, view, patch_mask=mask, mask_token=self.mask_token)
                            for view, mask in zip(views[:2], masks)]
-        local_student = self.encoder.tokens(views[2])
+        local_student = self.encode_tokens(self.encoder, views[2])
         all_student = globals_student + [local_student]
         cls_student = [self.cls_head(tokens[:, 0]) / self.student_temperature
                        for tokens in all_student]
         patch_student = [self.patch_head(tokens[:, 1:]) / self.student_temperature
                          for tokens in globals_student]
         with torch.no_grad():
-            teacher_tokens = [self.teacher.tokens(view) for view in views[:2]]
+            teacher_tokens = [self.encode_tokens(self.teacher, view) for view in views[:2]]
             cls_logits = [self.teacher_cls_head(tokens[:, 0]) for tokens in teacher_tokens]
             patch_logits = [self.teacher_patch_head(tokens[:, 1:]) for tokens in teacher_tokens]
             if self.centering == 'sinkhorn':

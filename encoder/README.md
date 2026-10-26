@@ -1,5 +1,7 @@
 # Tactile encoders
 
+[DINO触觉RoPE](DINO_TactileRoPE/README.md) adds a rest-relative rotation branch and inter-patch rotary attention to DINO, without auxiliary supervision. Run `bash scripts/train_dino_tactile_rope.sh`; it uses raw depth/deformation rather than RGB.
+
 Encoder identities now include `pretrained_mode=univtac|tactile|vision`.
 See [PRETRAINED.md](PRETRAINED.md) for the model catalog, official downloads,
 4-frame/stride-2 input contract, adaptation objectives, tuning results and policy examples.
@@ -71,3 +73,7 @@ Use `TACTILE_INPUT_MODE=depth_deform_nonlinear_radial ENCODER_METHOD=VAE
 ENCODER_SIZE=S` for policy training. `encoder.pth` stores the best encoder;
 new VAE runs also save the corresponding complete encoder/decoder in `best.pth`.
 `last.pth` retains the final complete training state.
+
+## Tactile RoPE V1 / V2
+
+See [training and inference guide](TACTILE_ROPE.md) for both self-supervised variants.

@@ -33,7 +33,7 @@ if [[ -z "$SIZE" ]]; then
     SIZE="$(PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -c 'import sys; from encoder.pretrained_registry import default_size; print(default_size(*sys.argv[1:]))' "$PRETRAINED_MODE" "$METHOD")"
 fi
 PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -c 'import sys; from encoder.pretrained_registry import validate_identity; validate_identity(*sys.argv[1:])' "$PRETRAINED_MODE" "$METHOD" "$SIZE"
-case "$INPUT" in marker_only|rgb_only|marker_rgb|depth_deform_20|depth_deform_80|depth_deform_160|depth_deform_240|depth_deform_nonlinear|depth_deform_nonlinear_radial) ;; *) echo "Invalid input: $INPUT" >&2; exit 2 ;; esac
+case "$INPUT" in depth_deform_raw|marker_only|rgb_only|marker_rgb|depth_deform_20|depth_deform_80|depth_deform_160|depth_deform_240|depth_deform_nonlinear|depth_deform_nonlinear_radial) ;; *) echo "Invalid input: $INPUT" >&2; exit 2 ;; esac
 if [[ "$PRETRAINED_MODE" == univtac ]]; then CONFIG="${CONFIG:-$ROOT/encoder/$METHOD/config.yml}"; fi
 RUN_DIR="$ROOT/encoder_results/$INPUT/$PRETRAINED_MODE/$METHOD/$SIZE/$(date +%Y%m%d-%H%M%S-%6N)"
 for ((i=0; i<${#EXTRA[@]}; i++)); do
@@ -51,6 +51,7 @@ for arg in "${EXTRA[@]}"; do
 done
 {
     DISPLAY_METHOD="$METHOD"
+    if [[ "$METHOD" == DINO_TactileRoPE ]]; then DISPLAY_METHOD='DINO触觉RoPE'; fi
     if [[ "$PRETRAINED_MODE" == univtac && "$METHOD" == V-JEPA ]]; then DISPLAY_METHOD='V-JEPA*'; fi
     echo "Model=$DISPLAY_METHOD size=$SIZE input=$INPUT batch_size=64 config=$CONFIG output=$RUN_DIR"
     if [[ "$PRETRAINED_MODE" == univtac ]]; then
