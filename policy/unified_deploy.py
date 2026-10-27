@@ -273,7 +273,7 @@ class Policy(BasePolicy):
                     raw = {key: rgb_image(stream[key])}
                 else:
                     raw = {"marker": as_numpy(stream["marker"])}
-                    if self.tactile_input_mode in DEPTH_DEFORM_SPECS:
+                    if self.tactile_input_mode in DEPTH_DEFORM_SPECS or self.tactile_input_mode == "depth_deform_raw":
                         raw["depth"] = as_numpy(stream["depth"])
                         for field in ("press_depth", "marker_full"):
                             if field in stream:

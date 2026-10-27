@@ -12,6 +12,10 @@ from torch import nn
 from .tactile_pooling import tactile_pool_size
 
 
+ROPE_METHODS = {"DINO_TactileRoPE": "tactile_rope_v1",
+                "DINO_TactileRoPE_V2": "tactile_rope_v2"}
+
+
 class TactileEncoder(nn.Module):
     def __init__(self, config, output_dim: int):
         super().__init__()
@@ -29,7 +33,8 @@ class TactileEncoder(nn.Module):
         size = state.get("size")
         self.pretrained_mode = state.get('pretrained_mode', 'univtac')
         config.tactile_encoder_pretrained_mode = self.pretrained_mode
-        if self.pretrained_mode == 'univtac' and method not in {"ResNet", "VAE", "MAE", "DINOv2", "I-JEPA", "V-JEPA"}:
+        self.is_rope = self.pretrained_mode == "univtac" and method in ROPE_METHODS
+        if self.pretrained_mode == 'univtac' and method not in {"ResNet", "VAE", "MAE", "DINOv2", "I-JEPA", "V-JEPA", *ROPE_METHODS}:
             raise ValueError(f"Unsupported UniVTAC tactile checkpoint method: {method}")
         if state.get("input_mode") != config.tactile_input_mode:
             raise ValueError(f"Checkpoint input {state.get('input_mode')} != {config.tactile_input_mode}")
@@ -38,7 +43,25 @@ class TactileEncoder(nn.Module):
         encoder_dir = Path(__file__).resolve().parents[2] / "encoder"
         if str(encoder_dir) not in sys.path:
             sys.path.insert(0, str(encoder_dir))
-        if self.pretrained_mode != 'univtac':
+        if self.is_rope:
+            if (state.get("architecture") != ROPE_METHODS[method]
+                    or state.get("input_mode") != "depth_deform_raw"
+                    or state.get("in_chans", 5) != 5):
+                raise ValueError("RoPE requires matching architecture and raw depth/u/v/x/y metadata")
+            if config.tactile_type not in ("cls", "full"):
+                raise ValueError("RoPE policy adapter supports cls or full tokens")
+            rope = state.get("model_config", {}).get("rope")
+            if not isinstance(rope, dict) or not rope:
+                raise ValueError("RoPE checkpoint must include model_config.rope calibration")
+            if method == "DINO_TactileRoPE":
+                from encoder.DINO_TactileRoPE.encoder import TactileRoPEViT as RoPEEncoder
+            else:
+                from encoder.DINO_TactileRoPE_V2.encoder import TactileRoPEViTV2 as RoPEEncoder
+            # Construct directly: the public inference loader freezes parameters.
+            self.backbone = RoPEEncoder(size, **rope)
+        elif config.tactile_input_mode == "depth_deform_raw":
+            raise ValueError("Raw depth/u/v/x/y requires a tactile RoPE encoder")
+        elif self.pretrained_mode != 'univtac':
             from encoder.external import ExternalEncoder
             self.backbone = ExternalEncoder(self.pretrained_mode, method, size, metadata=state, pretrained=False)
         elif method == "ResNet":
@@ -74,13 +97,20 @@ class TactileEncoder(nn.Module):
         from encoder.pretrained_registry import constructor_metadata
         config.tactile_encoder_config = {**constructor_metadata(state), **{
             "method": method, "size": size, "input_mode": state["input_mode"],
-            "image_size": self.image_size, "in_chans": state["in_chans"],
+            "image_size": self.image_size, "in_chans": state.get("in_chans", 5 if self.is_rope else None),
             "tactile_type": self.mode, "color_order": "RGB",
         }}
         if 'depth_deform_encoding' in state:
             config.tactile_encoder_config['depth_deform_encoding'] = state['depth_deform_encoding']
 
     def _tokens(self, x: torch.Tensor) -> torch.Tensor:
+        if self.is_rope:
+            if x.ndim != 4 or x.shape[1] != 5 or x.shape[-2:] != (self.image_size, self.image_size):
+                raise ValueError("RoPE expects [B,5,H,W] at checkpoint image_size; prepare raw fields first")
+            # Never image-normalize, clamp, or rescale native pixel coordinates.
+            # tokens[:, 0] is the pretrained pooled global/CLS-interface token.
+            tokens = self.backbone.tokens(x)
+            return tokens[:, :1] if self.mode == "cls" else tokens
         pool_size = tactile_pool_size(self.mode)
         if pool_size is not None and self.pretrained_mode == 'tactile':
             return self.backbone.pooled_tokens(x, pool_size)

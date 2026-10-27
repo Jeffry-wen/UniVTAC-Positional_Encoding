@@ -264,8 +264,8 @@ class SensorRoutingMixin:
         """``input_features`` for the dataset normalizer.
 
         In ``encode`` mode the tactile-encoder keys are dropped here so they are *not*
-        normalized with dataset mean/std: the tactile-MAE encoder consumes raw [0, 1]
-        images and applies its own (ImageNet) normalization internally.
+        normalized with dataset mean/std. Each backbone owns its input contract;
+        tactile RoPE specifically requires raw depth/u/v/x/y in native units.
         """
         feats = dict(self.input_features)
         if self.tactile_mode == "encode":
